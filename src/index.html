@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>js-knowledge-flomo</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #faf8f5;
+            --bg-card: #ffffff;
+            --text: #1a1a1a;
+            --text-secondary: #6b6b6b;
+            --accent: #c45d3e;
+            --accent-light: #f4e8e3;
+            --border: #e8e4df;
+            --tag-bg: #eee8e0;
+            --tag-text: #7a5c44;
+            --shadow: 0 1px 3px rgba(0,0,0,0.06);
+            --radius: 6px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Noto Serif SC', serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.7;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 40px 24px;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin-bottom: 48px;
+            border-bottom: 2px solid var(--text);
+            padding-bottom: 16px;
+        }
+
+        header h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        header h1 span { color: var(--accent); }
+
+        nav {
+            display: flex;
+            gap: 8px;
+        }
+
+        nav button {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            padding: 6px 14px;
+            border: 1px solid var(--border);
+            background: var(--bg-card);
+            color: var(--text-secondary);
+            border-radius: var(--radius);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        nav button:hover, nav button.active {
+            background: var(--text);
+            color: var(--bg);
+            border-color: var(--text);
+        }
+
+        .search-bar {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 32px;
+        }
+
+        .search-bar input {
+            flex: 1;
+            font-family: 'Noto Serif SC', serif;
+            font-size: 0.95rem;
+            padding: 10px 16px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--bg-card);
+            outline: none;
+            transition: border-color 0.15s;
+        }
+
+        .search-bar input:focus {
+            border-color: var(--accent);
+        }
+
+        .search-bar button {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            padding: 10px 20px;
+            border: none;
+            background: var(--accent);
+            color: white;
+            border-radius: var(--radius);
+            cursor: pointer;
+        }
+
+        .search-bar button:hover { opacity: 0.9; }
+
+        /* ── Views ── */
+
+        .view { display: none; }
+        .view.active { display: block; }
+
+        /* ── Memo list ── */
+
+        .memo-list { display: flex; flex-direction: column; gap: 16px; }
+
+        .memo-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px 24px;
+            box-shadow: var(--shadow);
+            transition: transform 0.1s;
+        }
+
+        .memo-card:hover { transform: translateY(-1px); }
+
+        .memo-content {
+            font-size: 0.95rem;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .memo-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border);
+        }
+
+        .memo-tags { display: flex; gap: 6px; flex-wrap: wrap; }
+
+        .tag {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.7rem;
+            padding: 2px 8px;
+            background: var(--tag-bg);
+            color: var(--tag-text);
+            border-radius: 3px;
+        }
+
+        .memo-date {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            color: var(--text-secondary);
+        }
+
+        /* ── Tags view ── */
+
+        .tag-cloud {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            padding: 24px 0;
+        }
+
+        .tag-cloud .tag-item {
+            font-family: 'JetBrains Mono', monospace;
+            padding: 6px 14px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--bg-card);
+            cursor: pointer;
+            transition: all 0.15s;
+            font-size: 0.8rem;
+        }
+
+        .tag-cloud .tag-item:hover {
+            background: var(--accent-light);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .tag-tree-container {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.82rem;
+            line-height: 2;
+            padding: 16px 0;
+        }
+
+        .tag-tree-container ul {
+            list-style: none;
+            padding-left: 20px;
+        }
+
+        .tag-tree-container > ul { padding-left: 0; }
+
+        .tag-tree-container li::before {
+            content: '├─ ';
+            color: var(--text-secondary);
+        }
+
+        .tag-tree-container li:last-child::before {
+            content: '└─ ';
+        }
+
+        .tag-tree-container li span {
+            cursor: pointer;
+            transition: color 0.1s;
+        }
+
+        .tag-tree-container li span:hover { color: var(--accent); }
+
+        /* ── Insights view ── */
+
+        .insight-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 24px;
+            margin-bottom: 16px;
+            box-shadow: var(--shadow);
+        }
+
+        .insight-card h3 {
+            font-size: 0.9rem;
+            margin-bottom: 12px;
+            color: var(--accent);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .insight-card .content {
+            font-size: 0.92rem;
+            white-space: pre-wrap;
+        }
+
+        .insight-card .meta {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.72rem;
+            color: var(--text-secondary);
+            margin-top: 12px;
+        }
+
+        .insight-actions {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 24px;
+        }
+
+        .insight-actions select, .insight-actions input {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--bg-card);
+            outline: none;
+        }
+
+        .insight-actions button {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            padding: 8px 16px;
+            border: none;
+            background: var(--accent);
+            color: white;
+            border-radius: var(--radius);
+            cursor: pointer;
+        }
+
+        /* ── Stats ── */
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            text-align: center;
+        }
+
+        .stat-card .value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 2rem;
+            font-weight: 600;
+            color: var(--accent);
+        }
+
+        .stat-card .label {
+            font-size: 0.82rem;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        /* ── Loading & empty ── */
+
+        .loading, .empty {
+            text-align: center;
+            padding: 48px 0;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .loading::after {
+            content: '';
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>knowledge<span>/</span>flomo</h1>
+            <nav>
+                <button class="active" data-view="memos">笔记</button>
+                <button data-view="tags">标签</button>
+                <button data-view="insights">洞察</button>
+                <button data-view="stats">统计</button>
+            </nav>
+        </header>
+
+        <!-- 笔记视图 -->
+        <div id="view-memos" class="view active">
+            <div class="search-bar">
+                <input type="text" id="search-input" placeholder="搜索笔记...">
+                <button id="search-btn">搜索</button>
+            </div>
+            <div id="memo-list" class="memo-list">
+                <div class="loading">加载中</div>
+            </div>
+        </div>
+
+        <!-- 标签视图 -->
+        <div id="view-tags" class="view">
+            <div id="tag-tree" class="tag-tree-container">
+                <div class="loading">加载标签树</div>
+            </div>
+        </div>
+
+        <!-- 洞察视图 -->
+        <div id="view-insights" class="view">
+            <div class="insight-actions">
+                <input type="text" id="insight-tag" placeholder="标签范围（可选）">
+                <select id="insight-period">
+                    <option value="7">最近 7 天</option>
+                    <option value="30" selected>最近 30 天</option>
+                    <option value="90">最近 90 天</option>
+                    <option value="">全部</option>
+                </select>
+                <button id="insight-btn">生成洞察</button>
+            </div>
+            <div id="insight-list">
+                <div class="empty">选择范围后点击「生成洞察」，AI 将分析你的笔记规律</div>
+            </div>
+        </div>
+
+        <!-- 统计视图 -->
+        <div id="view-stats" class="view">
+            <div id="stats-container" class="stats-grid">
+                <div class="loading">加载统计数据</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API = '/api';
+
+        // ── Navigation ──
+        document.querySelectorAll('nav button').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+                btn.classList.add('active');
+                const viewId = `view-${btn.dataset.view}`;
+                document.getElementById(viewId).classList.add('active');
+
+                if (btn.dataset.view === 'tags') loadTags();
+                if (btn.dataset.view === 'stats') loadStats();
+            });
+        });
+
+        // ── Memos ──
+        const searchInput = document.getElementById('search-input');
+        const searchBtn = document.getElementById('search-btn');
+        const memoList = document.getElementById('memo-list');
+
+        searchBtn.addEventListener('click', () => searchMemos(searchInput.value));
+        searchInput.addEventListener('keydown', e => {
+            if (e.key === 'Enter') searchMemos(searchInput.value);
+        });
+
+        async function searchMemos(query) {
+            memoList.innerHTML = '<div class="loading">搜索中</div>';
+            try {
+                const params = new URLSearchParams();
+                if (query) params.set('q', query);
+                params.set('limit', '30');
+                const res = await fetch(`${API}/search?${params}`);
+                const data = await res.json();
+                renderMemos(data);
+            } catch (err) {
+                memoList.innerHTML = `<div class="empty">加载失败: ${err.message}</div>`;
+            }
+        }
+
+        function renderMemos(data) {
+            const memos = data?.memos || data?.items || data?.data || (Array.isArray(data) ? data : []);
+            if (!memos.length) {
+                memoList.innerHTML = '<div class="empty">暂无笔记</div>';
+                return;
+            }
+
+            memoList.innerHTML = memos.map(m => {
+                const content = m.content || m.raw || '';
+                const tags = extractTags(content);
+                const cleanContent = content.replace(/#\S+/g, '').trim();
+                const date = m.created_at || m.created || '';
+
+                return `<div class="memo-card">
+                    <div class="memo-content">${escapeHtml(cleanContent)}</div>
+                    <div class="memo-meta">
+                        <div class="memo-tags">${tags.map(t => `<span class="tag">${escapeHtml(t)}</span>`).join('')}</div>
+                        <div class="memo-date">${date ? formatDate(date) : ''}</div>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        function extractTags(content) {
+            const matches = content.match(/#\S+/g);
+            return matches || [];
+        }
+
+        // ── Tags ──
+        async function loadTags() {
+            const container = document.getElementById('tag-tree');
+            container.innerHTML = '<div class="loading">加载标签树</div>';
+            try {
+                const res = await fetch(`${API}/tags`);
+                const data = await res.json();
+                renderTagTree(container, data);
+            } catch (err) {
+                container.innerHTML = `<div class="empty">加载失败: ${err.message}</div>`;
+            }
+        }
+
+        function renderTagTree(container, data) {
+            if (typeof data === 'string') {
+                container.innerHTML = `<pre>${escapeHtml(data)}</pre>`;
+                return;
+            }
+
+            const tags = data?.tags || data?.tree || data?.data || (Array.isArray(data) ? data : []);
+            if (!tags.length && typeof data === 'object') {
+                container.innerHTML = `<pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
+                return;
+            }
+
+            function buildTree(items) {
+                if (!items?.length) return '';
+                return '<ul>' + items.map(item => {
+                    const name = item.name || item.tag || item;
+                    const children = item.children || item.sub_tags || [];
+                    return `<li><span onclick="tagClick('${escapeHtml(typeof name === 'string' ? name : '')}')">${escapeHtml(typeof name === 'string' ? name : JSON.stringify(name))}</span>${buildTree(children)}</li>`;
+                }).join('') + '</ul>';
+            }
+
+            container.innerHTML = buildTree(tags) || `<pre>${escapeHtml(JSON.stringify(data, null, 2))}</pre>`;
+        }
+
+        window.tagClick = function(tag) {
+            document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            document.querySelector('[data-view="memos"]').classList.add('active');
+            document.getElementById('view-memos').classList.add('active');
+            searchInput.value = '';
+            searchMemos(tag);
+        };
+
+        // ── Insights ──
+        document.getElementById('insight-btn').addEventListener('click', generateInsight);
+
+        async function generateInsight() {
+            const list = document.getElementById('insight-list');
+            list.innerHTML = '<div class="loading">AI 正在分析你的笔记</div>';
+
+            const tag = document.getElementById('insight-tag').value;
+            const period = document.getElementById('insight-period').value;
+
+            try {
+                const params = new URLSearchParams();
+                if (tag) params.set('tag', tag);
+                if (period) params.set('period', period);
+                const res = await fetch(`${API}/insights?${params}`);
+                const data = await res.json();
+                renderInsight(list, data);
+            } catch (err) {
+                list.innerHTML = `<div class="empty">分析失败: ${err.message}</div>`;
+            }
+        }
+
+        function renderInsight(container, data) {
+            if (data.status === 'empty') {
+                container.innerHTML = `<div class="empty">${escapeHtml(data.message)}</div>`;
+                return;
+            }
+
+            container.innerHTML = `<div class="insight-card">
+                <h3>洞察报告 · ${data.memo_count || '?'} 条笔记</h3>
+                <div class="content">${escapeHtml(data.analysis || JSON.stringify(data, null, 2))}</div>
+                <div class="meta">ID: ${data.insight_id || '-'}</div>
+            </div>`;
+        }
+
+        // ── Stats ──
+        async function loadStats() {
+            const container = document.getElementById('stats-container');
+            container.innerHTML = '<div class="loading">加载统计</div>';
+            try {
+                const res = await fetch(`${API}/stats`);
+                const data = await res.json();
+                container.innerHTML = `
+                    <div class="stat-card"><div class="value">${data.cached_memos || 0}</div><div class="label">缓存笔记</div></div>
+                    <div class="stat-card"><div class="value">${data.insights || 0}</div><div class="label">洞察报告</div></div>
+                    <div class="stat-card"><div class="value">${data.latest_memo_cache ? formatDate(data.latest_memo_cache) : '-'}</div><div class="label">最近缓存</div></div>
+                    <div class="stat-card"><div class="value">${data.latest_insight ? formatDate(data.latest_insight) : '-'}</div><div class="label">最近洞察</div></div>
+                `;
+            } catch (err) {
+                container.innerHTML = `<div class="empty">加载失败: ${err.message}</div>`;
+            }
+        }
+
+        // ── Utils ──
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        function formatDate(dateStr) {
+            try {
+                const d = new Date(dateStr);
+                return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+            } catch { return dateStr; }
+        }
+
+        // ── Init ──
+        searchMemos('');
+    </script>
+</body>
+</html>

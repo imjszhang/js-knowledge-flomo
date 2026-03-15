@@ -1,0 +1,24 @@
+{
+  "name": "js-knowledge-flomo",
+  "version": "1.0.0",
+  "description": "以 flomo 为核心的知识管理工具 — MCP Client + MCP Server 双角色，AI 增强笔记洞察、整理与写作。",
+  "author": "imjszhang",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "cli": "node cli/cli.js",
+    "dev": "node cli/cli.js serve",
+    "mcp": "node mcp-server/index.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "dotenv": "^16.4.7",
+    "open": "^10.1.0",
+    "openai": "^6.26.0",
+    "sqlite3": "^5.1.7",
+    "zod": "^3.25.0"
+  }
+}
