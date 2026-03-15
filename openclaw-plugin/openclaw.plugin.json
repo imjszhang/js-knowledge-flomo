@@ -1,0 +1,67 @@
+{
+  "id": "js-knowledge-flomo",
+  "name": "JS Knowledge Flomo",
+  "description": "以 flomo 为核心的知识管理工具 — 通过 flomo MCP 读写笔记，叠加 AI 洞察、关联发现、标签整理、写作辅助等增强能力。",
+  "version": "1.0.0",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "flomoMcpUrl": {
+        "type": "string",
+        "default": "https://flomoapp.com/mcp",
+        "description": "flomo MCP 服务地址（默认即可，无需修改）"
+      },
+      "llmApiBaseUrl": {
+        "type": "string",
+        "default": "",
+        "description": "LLM API 基础 URL（OpenAI 兼容接口）"
+      },
+      "llmApiKey": {
+        "type": "string",
+        "default": "",
+        "description": "LLM API Key"
+      },
+      "llmApiModel": {
+        "type": "string",
+        "default": "gpt-4.1-mini",
+        "description": "LLM 模型名称"
+      },
+      "dbPath": {
+        "type": "string",
+        "default": "",
+        "description": "本地缓存数据库路径（留空则使用项目默认路径 data/cache.db）"
+      }
+    }
+  },
+  "uiHints": {
+    "flomoMcpUrl": {
+      "label": "flomo MCP 地址",
+      "placeholder": "https://flomoapp.com/mcp",
+      "help": "flomo 官方 MCP 服务地址，通常无需修改",
+      "advanced": true
+    },
+    "llmApiBaseUrl": {
+      "label": "LLM API 地址",
+      "placeholder": "https://api.openai.com/v1",
+      "help": "OpenAI 兼容的 LLM API 基础 URL，用于 AI 洞察、标签建议等功能"
+    },
+    "llmApiKey": {
+      "label": "LLM API Key",
+      "help": "LLM 服务的 API 密钥",
+      "secret": true
+    },
+    "llmApiModel": {
+      "label": "LLM 模型",
+      "placeholder": "gpt-4.1-mini",
+      "help": "用于 AI 分析的 LLM 模型名称"
+    },
+    "dbPath": {
+      "label": "数据库路径",
+      "placeholder": "data/cache.db",
+      "help": "本地 SQLite 缓存数据库路径，留空使用默认位置",
+      "advanced": true
+    }
+  }
+}

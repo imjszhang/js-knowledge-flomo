@@ -1,0 +1,11 @@
+{
+  "name": "js-knowledge-flomo",
+  "version": "1.0.0",
+  "description": "OpenClaw plugin for JS Knowledge Flomo — 以 flomo 为核心的知识管理工具",
+  "type": "module",
+  "main": "index.mjs",
+  "license": "MIT",
+  "openclaw": {
+    "extensions": ["./index.mjs"]
+  }
+}

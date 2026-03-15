@@ -387,7 +387,7 @@
     </div>
 
     <script>
-        const API = '/api';
+        const API = new URL('api', document.baseURI).pathname;
 
         // ── Navigation ──
         document.querySelectorAll('nav button').forEach(btn => {
