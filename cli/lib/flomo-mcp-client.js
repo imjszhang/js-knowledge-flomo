@@ -152,12 +152,11 @@ export default class FlomoMcpClient {
      */
     async memoSearch(params = {}) {
         const args = {};
-        if (params.query) args.query = params.query;
+        if (params.query) args.keywords = params.query;
         if (params.tag) args.tag = params.tag;
-        if (params.from) args.from = params.from;
-        if (params.to) args.to = params.to;
+        if (params.from) args.start_date = params.from;
+        if (params.to) args.end_date = params.to;
         if (params.limit) args.limit = params.limit;
-        if (params.offset) args.offset = params.offset;
         return this.callTool('memo_search', args);
     }
 
@@ -195,7 +194,7 @@ export default class FlomoMcpClient {
      * @returns {Promise<Object>}
      */
     async tagSearch(query) {
-        return this.callTool('tag_search', { query });
+        return this.callTool('tag_search', { keywords: query });
     }
 
     /**
@@ -205,6 +204,6 @@ export default class FlomoMcpClient {
      * @returns {Promise<Object>}
      */
     async tagRename(oldName, newName) {
-        return this.callTool('tag_rename', { old_name: oldName, new_name: newName });
+        return this.callTool('tag_rename', { old_tag: oldName, new_tag: newName });
     }
 }
