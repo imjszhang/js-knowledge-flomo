@@ -57,6 +57,11 @@ export default class FlomoMcpClient {
         );
 
         this.client.onerror = (error) => {
+            // 忽略预期内的断开：disconnect() 会 abort 流，MCP SDK 会触发 "SSE stream disconnected: AbortError"
+            const msg = String(error?.message ?? error);
+            if (/AbortError|aborted/i.test(msg)) {
+                return;
+            }
             process.stderr.write(`[MCP Client Error] ${error}\n`);
         };
 
