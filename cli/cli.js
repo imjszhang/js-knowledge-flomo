@@ -65,8 +65,8 @@ async function cmdAuth(flags) {
         return;
     }
 
-    const token = await getAccessToken({ force: !!flags.force });
-    toJson({ status: 'success', message: '认证成功', token_preview: token.slice(0, 12) + '...' });
+    await getAccessToken({ force: !!flags.force });
+    toJson({ status: 'success', message: '认证成功' });
 }
 
 // ── Command: write ───────────────────────────────────────────────────

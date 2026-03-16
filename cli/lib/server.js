@@ -68,9 +68,9 @@ export async function startServer(options = {}) {
         }
     });
 
-    server.listen(port, () => {
-        process.stderr.write(`Web UI: http://localhost:${port}\n`);
-        process.stderr.write(`API:    http://localhost:${port}/api/\n`);
+    server.listen(port, '127.0.0.1', () => {
+        process.stderr.write(`Web UI: http://127.0.0.1:${port}\n`);
+        process.stderr.write(`API:    http://127.0.0.1:${port}/api/\n`);
     });
 }
 

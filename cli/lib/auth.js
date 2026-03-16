@@ -253,7 +253,7 @@ function openBrowserAndWaitForCallback(authUrl, expectedState) {
             resolve(code);
         });
 
-        server.listen(CALLBACK_PORT, async () => {
+        server.listen(CALLBACK_PORT, '127.0.0.1', async () => {
             process.stderr.write(`\n请在浏览器中完成授权:\n${authUrl}\n\n`);
             try {
                 const open = (await import('open')).default;

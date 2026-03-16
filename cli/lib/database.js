@@ -222,6 +222,5 @@ export async function getStats() {
         insights: insightCount,
         latest_memo_cache: latestMemo?.cached_at || null,
         latest_insight: latestInsight?.created_at || null,
-        db_path: _dbPath,
     };
 }

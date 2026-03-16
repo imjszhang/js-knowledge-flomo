@@ -642,8 +642,8 @@ export default function register(api) {
               console.log("已清除本地认证信息");
               return;
             }
-            const token = await getAccessToken({ force: !!opts.force });
-            console.log(`认证成功 (token: ${token.slice(0, 12)}...)`);
+            await getAccessToken({ force: !!opts.force });
+            console.log("认证成功");
           } catch (err) {
             console.error(`认证失败: ${err.message}`);
           }
