@@ -8,6 +8,11 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "flomoToken": {
+        "type": "string",
+        "default": "",
+        "description": "flomo 直接 Token（设置后跳过 OAuth 授权流程，可从 flomo MCP 配置中获取）"
+      },
       "flomoMcpUrl": {
         "type": "string",
         "default": "https://flomoapp.com/mcp",
@@ -36,6 +41,12 @@
     }
   },
   "uiHints": {
+    "flomoToken": {
+      "label": "flomo Token",
+      "placeholder": "粘贴你的 flomo Token",
+      "help": "直接使用 Token 认证，设置后无需 OAuth 授权流程",
+      "secret": true
+    },
     "flomoMcpUrl": {
       "label": "flomo MCP 地址",
       "placeholder": "https://flomoapp.com/mcp",

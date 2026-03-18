@@ -65,6 +65,12 @@ async function cmdAuth(flags) {
         return;
     }
 
+    if (process.env.FLOMO_TOKEN) {
+        toStderr('当前使用环境变量 FLOMO_TOKEN 直接认证，无需 OAuth 授权。');
+        toJson({ status: 'success', message: '认证成功（直接 Token 模式）', mode: 'token' });
+        return;
+    }
+
     await getAccessToken({ force: !!flags.force });
     toJson({ status: 'success', message: '认证成功' });
 }

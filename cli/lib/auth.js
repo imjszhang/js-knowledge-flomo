@@ -50,6 +50,10 @@ export async function clearAuth() {
  * @returns {Promise<string>} access_token
  */
 export async function getAccessToken(options = {}) {
+    if (process.env.FLOMO_TOKEN) {
+        return process.env.FLOMO_TOKEN;
+    }
+
     if (!options.force) {
         const saved = await loadAuth();
         if (saved?.access_token) {

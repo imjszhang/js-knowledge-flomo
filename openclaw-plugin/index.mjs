@@ -24,6 +24,7 @@ const MIME_TYPES = {
 };
 
 function applyEnv(pluginCfg) {
+  if (pluginCfg.flomoToken) process.env.FLOMO_TOKEN = pluginCfg.flomoToken;
   if (pluginCfg.flomoMcpUrl) process.env.FLOMO_MCP_URL = pluginCfg.flomoMcpUrl;
   if (pluginCfg.llmApiBaseUrl) process.env.LLM_API_BASE_URL = pluginCfg.llmApiBaseUrl;
   if (pluginCfg.llmApiKey) process.env.LLM_API_KEY = pluginCfg.llmApiKey;
@@ -640,6 +641,10 @@ export default function register(api) {
             if (opts.logout) {
               await clearAuth();
               console.log("已清除本地认证信息");
+              return;
+            }
+            if (process.env.FLOMO_TOKEN) {
+              console.log("当前使用环境变量 FLOMO_TOKEN 直接认证，无需 OAuth 授权。");
               return;
             }
             await getAccessToken({ force: !!opts.force });
