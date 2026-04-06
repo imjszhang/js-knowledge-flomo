@@ -5,6 +5,9 @@
   "type": "module",
   "main": "index.mjs",
   "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.7"
+  },
   "openclaw": {
     "extensions": ["./index.mjs"]
   }
