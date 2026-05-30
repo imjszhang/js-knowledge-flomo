@@ -1,8 +1,47 @@
 {
   "id": "js-knowledge-flomo",
+  "activation": {
+    "onStartup": true
+  },
   "name": "JS Knowledge Flomo",
   "description": "以 flomo 为核心的知识管理工具 — 通过 flomo MCP 读写笔记，叠加 AI 洞察、关联发现、标签整理、写作辅助等增强能力。",
   "version": "1.0.0",
+  "contracts": {
+    "tools": [
+      "flomo_memo_create",
+      "flomo_memo_update",
+      "flomo_memo_search",
+      "flomo_memo_batch_get",
+      "flomo_memo_recommended",
+      "flomo_tag_tree",
+      "flomo_tag_search",
+      "flomo_tag_rename",
+      "flomo_generate_insights",
+      "flomo_track_evolution",
+      "flomo_find_connections",
+      "flomo_draft_outline",
+      "flomo_collect_material",
+      "flomo_suggest_tags",
+      "flomo_audit_tags"
+    ]
+  },
+  "toolMetadata": {
+    "flomo_memo_create": { "optional": true },
+    "flomo_memo_update": { "optional": true },
+    "flomo_memo_search": { "optional": true },
+    "flomo_memo_batch_get": { "optional": true },
+    "flomo_memo_recommended": { "optional": true },
+    "flomo_tag_tree": { "optional": true },
+    "flomo_tag_search": { "optional": true },
+    "flomo_tag_rename": { "optional": true },
+    "flomo_generate_insights": { "optional": true },
+    "flomo_track_evolution": { "optional": true },
+    "flomo_find_connections": { "optional": true },
+    "flomo_draft_outline": { "optional": true },
+    "flomo_collect_material": { "optional": true },
+    "flomo_suggest_tags": { "optional": true },
+    "flomo_audit_tags": { "optional": true }
+  },
   "skills": ["./skills"],
   "configSchema": {
     "type": "object",
