@@ -3,7 +3,7 @@ import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { candidateChoiceSchema, candidatesSchema, contextSchema, decisionSchema, type ActiveContext, type Actor, type Change, type Workspace } from '../shared/contracts.js';
+import { candidateChoiceSchema, candidatesSchema, contextSchema, decisionSchema, sourceAttachSchema, type ActiveContext, type Actor, type Change, type Workspace } from '../shared/contracts.js';
 
 export class WorkbenchError extends Error {
   constructor(public readonly code: string, message: string, public readonly exitCode = 1, public readonly details?: unknown) {
@@ -179,6 +179,9 @@ const usage = `flomo workbench CLI (requires the local service)
   material set ID --memo ID1,ID2 --base-version N
   material propose ID --file PATH --base-version N
   material decide ID --memo ID --status selected|dismissed|proposed --base-version N
+  source resolve ID | source get ARTICLE_ID
+  source attach ID --article ARTICLE_ID --base-version N
+  source detach ID --article ARTICLE_ID --base-version N
   decision add ID --file PATH --base-version N
   decision answer ID --decision ID (--file PATH | --stdin | --text TEXT) --base-version N
   message add ID --role user|assistant (--file PATH | --stdin | --text TEXT) --base-version N
@@ -194,6 +197,9 @@ Use current instead of a workspace ID to target the note selected in the Web.
 Updating current requires --context-revision N from context get; explicit IDs do not.
 context revision controls the shared selection; base-version controls workspace content.
 material propose reads a JSON array of {memoId, reason, relation}; decision add reads {question, options}.
+material set changes only flomo materials; collector materials use source attach/detach.
+source resolve finds collector articles linked from the source and selected flomo materials.
+source attach saves a full article snapshot; attaching it again explicitly refreshes that snapshot.
 FLOMO_WORKBENCH_URL defaults to http://127.0.0.1:3000.
 Exit codes: 0 success; 1 service error; 2 invalid input; 3 version conflict; 4 service unavailable.
 Reuse an idempotency key only when retrying the exact same AI/publish operation.
@@ -209,6 +215,7 @@ const optionTypes: Record<string, { type: 'string' | 'boolean' }> = {
   acknowledge: { type: 'boolean' }, workspace: { type: 'string' }, after: { type: 'string' }, prefix: { type: 'string' },
   view: { type: 'string' }, 'base-revision': { type: 'string' }, summary: { type: 'string' },
   status: { type: 'string' }, decision: { type: 'string' }, 'context-revision': { type: 'string' },
+  article: { type: 'string' },
 };
 
 const commandOptions: Record<string, { flags: string[]; id?: boolean }> = {
@@ -226,6 +233,9 @@ const commandOptions: Record<string, { flags: string[]; id?: boolean }> = {
   'material set': { flags: ['memo', 'base-version'], id: true },
   'material propose': { flags: ['file', 'base-version'], id: true },
   'material decide': { flags: ['memo', 'status', 'base-version'], id: true },
+  'source resolve': { flags: [], id: true }, 'source get': { flags: [], id: true },
+  'source attach': { flags: ['article', 'base-version'], id: true },
+  'source detach': { flags: ['article', 'base-version'], id: true },
   'decision add': { flags: ['file', 'base-version'], id: true },
   'decision answer': { flags: ['decision', 'file', 'stdin', 'text', 'base-version'], id: true },
   'message add': { flags: ['role', 'file', 'stdin', 'text', 'base-version'], id: true },
@@ -235,7 +245,7 @@ const commandOptions: Record<string, { flags: string[]; id?: boolean }> = {
   'changes list': { flags: ['after'] }, 'changes watch': { flags: ['after'] },
   'settings get': { flags: [] }, 'settings set': { flags: ['file'] }, 'service status': { flags: [] },
 };
-for (const command of ['annotation create', 'workspace refresh', 'workspace rebase', 'workspace goal', 'draft update', 'draft publish', 'material set', 'material propose', 'material decide', 'decision add', 'decision answer', 'message add', 'ai run']) {
+for (const command of ['annotation create', 'workspace refresh', 'workspace rebase', 'workspace goal', 'draft update', 'draft publish', 'material set', 'material propose', 'material decide', 'source attach', 'source detach', 'decision add', 'decision answer', 'message add', 'ai run']) {
   commandOptions[command]!.flags.push('context-revision');
 }
 
@@ -262,6 +272,7 @@ export async function runCli(args: string[], io: CliIO = defaultIO, suppliedClie
     const command = `${group} ${action}`;
     const spec = commandOptions[command];
     if (!spec || positionals.length !== (spec.id ? 3 : 2)) throw new WorkbenchError('INVALID_COMMAND', 'Unknown command or incorrect positional arguments. Run with --help.', 2);
+    if (group === 'source' && !id) throw new WorkbenchError('INVALID_ARGUMENT', 'A nonempty workspace or article ID is required.', 2);
     for (const key of Object.keys(values)) {
       if (key !== 'json' && !spec.flags.includes(key)) throw new WorkbenchError('INVALID_ARGUMENT', `Option --${key} does not apply to ${command}.`, 2);
     }
@@ -321,7 +332,7 @@ export async function runCli(args: string[], io: CliIO = defaultIO, suppliedClie
       case 'draft publish': result = await workspaceRequest('POST', '/publish', { baseVersion: integer('expected-version'), idempotencyKey: string('idempotency-key', true) }); break;
       case 'material set': {
         const memoIds = string('memo');
-        if (memoIds === undefined) throw new WorkbenchError('INVALID_ARGUMENT', '--memo is required; pass an empty string to remove all materials.', 2);
+        if (memoIds === undefined) throw new WorkbenchError('INVALID_ARGUMENT', '--memo is required; pass an empty string to remove all flomo materials.', 2);
         result = await workspaceRequest('PUT', '/materials', { memoIds: memoIds.split(',').map(value => value.trim()).filter(Boolean), baseVersion: integer('base-version') });
         break;
       }
@@ -336,6 +347,23 @@ export async function runCli(args: string[], io: CliIO = defaultIO, suppliedClie
         const parsed = candidateChoiceSchema.safeParse({ status: string('status', true), baseVersion: integer('base-version') });
         if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', '--status must be selected, dismissed or proposed.', 2);
         result = await workspaceRequest('PATCH', `/candidates/${encodeURIComponent(memoId)}`, parsed.data);
+        break;
+      }
+      case 'source resolve': result = await workspaceRequest('GET', '/sources'); break;
+      case 'source get': {
+        const parsed = sourceAttachSchema.shape.articleId.safeParse(id);
+        if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', 'ARTICLE_ID must contain 1 to 500 characters.', 2);
+        result = await client.request('GET', `/sources/${encodeURIComponent(parsed.data)}`);
+        break;
+      }
+      case 'source attach':
+      case 'source detach': {
+        const parsed = sourceAttachSchema.safeParse({ articleId: string('article', true), baseVersion: integer('base-version') });
+        if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', '--article must contain 1 to 500 characters.', 2);
+        const { articleId, baseVersion } = parsed.data;
+        result = command === 'source attach'
+          ? await workspaceRequest('POST', '/sources', { articleId, baseVersion })
+          : await workspaceRequest('DELETE', `/sources/${encodeURIComponent(articleId)}`, { baseVersion });
         break;
       }
       case 'decision add': {

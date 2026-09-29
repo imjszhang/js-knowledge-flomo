@@ -352,3 +352,22 @@ summary::marker { color: #819180; font-size: 11px; }
 .unlinked-filter { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin: 0 0 16px; font-size:12px; cursor:pointer; }
 .unlinked-filter input { accent-color:var(--green); }
 .unlinked-filter span { color:#69766c; font-size:11px; }
+
+.collector-sources { margin: 20px 0; padding: 18px 0; border-top: 1px solid var(--border); }
+.collector-sources .section-heading h2 { display: flex; align-items: center; gap: 7px; font-size: 14px; }
+.collector-source { margin-top: 13px; padding: 14px; border: 1px solid #e0e5e1; border-radius: 9px; background: white; }
+.collector-source-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; color: var(--muted); font-size: 11px; }
+.collector-source-status { color: #557d3f; }
+.collector-source.missing .collector-source-status { color: var(--muted); }
+.collector-source.ambiguous .collector-source-status, .collector-source.unavailable .collector-source-status { color: #946d3a; }
+.collector-link { max-width: 100%; overflow-wrap: anywhere; word-break: break-word; }
+.collector-link svg { flex-shrink: 0; }
+.collector-match { padding-top: 13px; margin-top: 12px; border-top: 1px solid #e5e9e5; }
+.collector-title { display: block; font-weight: 550; line-height: 1.8; }
+.collector-content { font-size: 14px; line-height: 1.9; }
+.collector-content > .prose { margin-bottom: 12px; }
+.collector-content .quiet-disclosure { margin-top: 12px; }
+.collector-loading { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; padding: 10px 0; }
+.collector-match .material-actions, .collector-material .material-actions { flex-wrap: wrap; }
+.collector-match .selected-label { font-size: 11px; line-height: 1.7; }
+.collector-material > .scope-notice { margin-top: 11px; padding-bottom: 0; }

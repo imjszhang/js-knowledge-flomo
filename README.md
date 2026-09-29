@@ -113,6 +113,12 @@ npm run --silent workbench -- changes watch --after 0 --json
 
 旧版搜索、洞察、缓存统计页面保留在 `npm run dev:legacy`，原 CLI、MCP、OpenClaw 入口保持兼容。新工作台加工状态请统一使用 `workbench` / `mcp:workbench`；旧入口直接修改 flomo 后，新工作台通过刷新原文检测变化。
 
+### 关联收藏原文
+
+设置 `COLLECTOR_BASE_URL` 指向已有的 `js-knowledge-collector` 服务后，工作台会按当前笔记和已选 flomo 材料里的链接查找收藏，支持展开正文并加入本次加工。选用后保存正文快照，Web、CLI、MCP 和 AI 共用；需要获取收藏库的最新正文时点击“刷新快照”。收藏查询只读，不会重新抓取文章或写回 flomo。
+
+可选配置为 `COLLECTOR_API_PREFIX`（默认 `/api/v1`）、`COLLECTOR_TOKEN` 和 `COLLECTOR_HTTP_PROXY`（HTTP / SOCKS5）。本机运行两个服务时需使用不同端口。CLI 使用 `source resolve current` / `source get <文章ID>`，MCP 使用 `workbench_source_resolve` / `workbench_source_get`；选用和移除材料需传工作区版本，详见 [工作台指南](WORKBENCH.md#关联概要中的收藏原文)。
+
 ---
 
 ## 三种使用方式

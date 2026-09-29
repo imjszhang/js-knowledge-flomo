@@ -38,6 +38,7 @@ import { pinnedTags } from "../../shared/contracts";
 import { api, messageOf, sourceUrl } from "./api";
 import { useChanges, useDebounce, useDraft } from "./hooks";
 import InlineDiff from "./InlineDiff";
+import { CollectorMaterialCard, CollectorSources } from "./CollectorSources";
 
 type LeaveGuard = () => Promise<unknown>;
 const viewLabels: Record<WorkbenchView, string> = { note: "笔记", materials: "材料", draft: "草稿" };
@@ -340,12 +341,12 @@ export function App() {
         {offered && <div className="notice context-notice" role="status"><div><strong>另一端切换了当前工作</strong><p>{offered.workspace?.title ?? "笔记选择"} · {viewLabels[offered.view]}</p></div><div className="inline-actions"><button className="text-button" onClick={() => void navigate(workspaceId, view, true)}>留在这里</button><button className="button secondary small" onClick={() => void navigate(offered.workspaceId, offered.view, false, true)}>跟随查看</button></div></div>}
         {!ready && !context.isError && !workspaces.isError ? <Loading label="正在恢复当前工作…" /> : workspaceId ? (
           selectedWorkspace.isPending ? <Loading label="正在打开笔记…" /> : !selectedWorkspace.data ? <div className="page-error"><ErrorBox error={selectedWorkspace.error} retry={() => void selectedWorkspace.refetch()} /><button className="button secondary" onClick={() => setLibraryOpen(true)}>选择其他笔记</button></div> :
-          <><ErrorBox error={selectedWorkspace.error} retry={() => void selectedWorkspace.refetch()} /><Workbench key={workspaceId} workspace={selectedWorkspace.data} view={view} onView={(next) => void navigate(workspaceId, next, true)} aiConfigured={health.data?.aiConfigured ?? false} setGuard={(value) => { guard.current = value; }} /></>
+          <><ErrorBox error={selectedWorkspace.error} retry={() => void selectedWorkspace.refetch()} /><Workbench key={workspaceId} workspace={selectedWorkspace.data} view={view} onView={(next) => void navigate(workspaceId, next, true)} aiConfigured={health.data?.aiConfigured ?? false} collectorConfigured={health.data?.collectorConfigured} setGuard={(value) => { guard.current = value; }} /></>
         ) : ready ? <section className="welcome-panel"><div className="empty-icon"><FileText size={24} /></div><h1>这次想把哪条笔记想清楚？</h1><p>选一条待编，在 Codex 对话中推进。材料、你的选择和草稿会保留在这里。</p><button className="button primary" onClick={() => setLibraryOpen(true)}>选择一条笔记<ArrowRight size={15} /></button><div className="welcome-steps"><span>读笔记</span><ArrowRight size={13}/><span>选材料</span><ArrowRight size={13}/><span>完善草稿</span></div></section> : null}
       </div>
       {libraryOpen && <Modal title="选择要继续的工作" onClose={() => setLibraryOpen(false)} drawer>
         <div className="segmented drawer-tabs"><button className={librarySection === "notes" ? "selected" : ""} onClick={() => setLibrarySection("notes")}>从笔记开始</button><button className={librarySection === "workspaces" ? "selected" : ""} onClick={() => setLibrarySection("workspaces")}>继续加工 <span>{workspaces.data?.length ?? 0}</span></button></div>
-        {librarySection === "notes" ? <><nav className="tag-navigation" aria-label="置顶标签">{[...tags, ""].map((item) => <button key={item} className={tag === item ? "selected" : ""} onClick={() => setTag(item)}>{item || "全部"}</button>)}</nav><Library tag={tag} onOpen={openMemo} flomoConfigured={health.data?.flomoConfigured} /></> : <div className="workspace-list">{workspaces.data?.length ? workspaces.data.map((item) => <button key={item.id} className={`workspace-row ${item.id === workspaceId ? "selected" : ""}`} onClick={() => void navigate(item.id)}><div><strong>{item.title}</strong><p>{item.goal || excerpt(item.draft, 90)}</p><span>{date(item.updatedAt, true)} · {item.materials.length} 条材料</span></div><ArrowRight size={16}/></button>) : <div className="empty-state"><h3>还没有加工中的笔记</h3><p>从置顶标签中选择一条笔记即可开始。</p><button className="text-button" onClick={() => setLibrarySection("notes")}>选择笔记<ArrowRight size={14}/></button></div>}</div>}
+        {librarySection === "notes" ? <><nav className="tag-navigation" aria-label="置顶标签">{[...tags, ""].map((item) => <button key={item} className={tag === item ? "selected" : ""} onClick={() => setTag(item)}>{item || "全部"}</button>)}</nav><Library tag={tag} onOpen={openMemo} flomoConfigured={health.data?.flomoConfigured} /></> : <div className="workspace-list">{workspaces.data?.length ? workspaces.data.map((item) => <button key={item.id} className={`workspace-row ${item.id === workspaceId ? "selected" : ""}`} onClick={() => void navigate(item.id)}><div><strong>{item.title}</strong><p>{item.goal || excerpt(item.draft, 90)}</p><span>{date(item.updatedAt, true)} · {item.materials.length + (item.collectorMaterials?.length ?? 0)} 条材料</span></div><ArrowRight size={16}/></button>) : <div className="empty-state"><h3>还没有加工中的笔记</h3><p>从置顶标签中选择一条笔记即可开始。</p><button className="text-button" onClick={() => setLibrarySection("notes")}>选择笔记<ArrowRight size={14}/></button></div>}</div>}
         <ErrorBox error={navigationError}/>
       </Modal>}
       {settingsOpen && <SettingsDialog settings={settings.data} aiConfigured={health.data?.aiConfigured ?? false} flomoConfigured={health.data?.flomoConfigured ?? false} onClose={() => setSettingsOpen(false)} />}
@@ -546,9 +547,9 @@ function Library({
   );
 }
 
-function Workbench({ workspace, view, onView, aiConfigured, setGuard }: {
+function Workbench({ workspace, view, onView, aiConfigured, collectorConfigured, setGuard }: {
   workspace: Workspace; view: WorkbenchView; onView: (view: WorkbenchView) => void;
-  aiConfigured: boolean; setGuard: (guard: LeaveGuard | null) => void;
+  aiConfigured: boolean; collectorConfigured: boolean | undefined; setGuard: (guard: LeaveGuard | null) => void;
 }) {
   const client = useQueryClient();
   const editor = useDraft(workspace);
@@ -585,6 +586,8 @@ function Workbench({ workspace, view, onView, aiConfigured, setGuard }: {
   const latestWorkspace = editor.acknowledged.version > workspace.version ? editor.acknowledged : workspace;
   const candidates = latestWorkspace.materialCandidates ?? [];
   const selected = latestWorkspace.materials;
+  const collectorMaterials = latestWorkspace.collectorMaterials ?? [];
+  const selectedCount = selected.length + collectorMaterials.length;
   const proposed = candidates.filter((item) => item.status === "proposed");
   const dismissed = candidates.filter((item) => item.status === "dismissed");
   const decisions = latestWorkspace.decisions ?? [];
@@ -641,6 +644,22 @@ function Workbench({ workspace, view, onView, aiConfigured, setGuard }: {
       else update(await api.materials(workspace.id, status === "selected" ? Array.from(new Set([...saved.materials.map((item) => item.id), memo.id])) : saved.materials.filter((item) => item.id !== memo.id).map((item) => item.id), saved.version));
     });
   }
+  async function attachSource(articleId: string) {
+    await action("collector", async () => {
+      const saved = await editor.session.flush();
+      update(await api.attachSource(workspace.id, articleId, saved.version));
+      void client.invalidateQueries({ queryKey: ["collectorArticle", articleId] });
+    });
+  }
+  async function removeSource(articleId: string) {
+    await action("collector", async () => {
+      const saved = await editor.session.flush();
+      update(await api.removeSource(workspace.id, articleId, saved.version));
+    });
+  }
+  function sourceAssociations(scope: "source" | "all") {
+    return <CollectorSources workspace={latestWorkspace} configured={collectorConfigured} scope={scope} disabled={!!busy} onAttach={attachSource} renderContent={(content) => <Markdown>{content}</Markdown>}/>;
+  }
   function materialCard(memo: Memo, candidate?: MaterialCandidate) {
     const status = candidate?.status ?? "selected";
     return <article className={`context-card ${status}`} key={memo.id}>
@@ -658,7 +677,7 @@ function Workbench({ workspace, view, onView, aiConfigured, setGuard }: {
         <div className="work-meta"><MemoLink memo={workspace.source}>来源笔记</MemoLink><span>{date(workspace.source.created_at)}</span><details className="work-options"><summary aria-label="当前工作操作">更多<ChevronDown size={12}/></summary><div><button disabled={!!busy} onClick={() => void action("refresh", async () => update(await api.refresh(workspace.id)))}><RefreshCw size={13} className={busy === "refresh" ? "spin" : ""}/>检查 flomo 更新</button><button onClick={() => { void navigator.clipboard.writeText(`npm run --silent workbench -- workspace get ${workspace.id} --json`).then(() => { setCopyLabel("已复制"); setTimeout(() => setCopyLabel("复制 Codex 读取命令"), 2000); }).catch(() => setError("无法访问剪贴板，请通过当前页面地址中的工作区 ID 读取。")); }}><Terminal size={13}/>{copyLabel}</button><p>草稿版本 v{latestWorkspace.version}<br/>flomo 检查于 {date(latestWorkspace.lastCheckedAt, true)}</p></div></details></div>
         <GoalEditor workspace={latestWorkspace} onUpdate={update} onDirty={(dirty) => { goalDirty.current = dirty; }} />
       </section>
-      <nav className="work-tabs" aria-label="当前工作视图">{(["note", "materials", "draft"] as WorkbenchView[]).map((item) => <button key={item} className={view === item ? "selected" : ""} aria-current={view === item ? "page" : undefined} onClick={() => onView(item)}>{item === "note" ? <FileText size={16}/> : item === "materials" ? <Layers3 size={16}/> : <BookOpen size={16}/>}<span>{viewLabels[item]}</span>{item === "materials" && (selected.length > 0 || proposed.length > 0) && <span className="tab-count" title={`已选 ${selected.length} 条，待选 ${proposed.length} 条`}>{proposed.length ? `${proposed.length} 待选` : selected.length}</span>}{item === "note" && decisionsToReview.length > 0 && <span className="tab-dot"/>}{item === "draft" && (editor.review || editor.conflict) && <span className="tab-dot"/>}</button>)}</nav>
+      <nav className="work-tabs" aria-label="当前工作视图">{(["note", "materials", "draft"] as WorkbenchView[]).map((item) => <button key={item} className={view === item ? "selected" : ""} aria-current={view === item ? "page" : undefined} onClick={() => onView(item)}>{item === "note" ? <FileText size={16}/> : item === "materials" ? <Layers3 size={16}/> : <BookOpen size={16}/>}<span>{viewLabels[item]}</span>{item === "materials" && (selectedCount > 0 || proposed.length > 0) && <span className="tab-count" title={`已选 ${selectedCount} 条，待选 ${proposed.length} 条`}>{proposed.length ? `${proposed.length} 待选` : selectedCount}</span>}{item === "note" && decisionsToReview.length > 0 && <span className="tab-dot"/>}{item === "draft" && (editor.review || editor.conflict) && <span className="tab-dot"/>}</button>)}</nav>
       <div className="work-view">
         <ErrorBox error={error}/>
         {editor.review && <div className="notice update-notice" role="status"><strong>Codex / 另一端更新了草稿</strong><p>{latestRevision?.actor !== "web" && latestRevision?.summary ? latestRevision.summary : "当前阅读和输入保持不变，查看后再采用新版本。"}</p><button className="text-button" onClick={() => setReviewOpen(true)}>查看草稿变化<ArrowRight size={14}/></button></div>}
@@ -671,16 +690,18 @@ function Workbench({ workspace, view, onView, aiConfigured, setGuard }: {
             <div className="document-label"><FileText size={13}/><span>flomo 原文</span></div>
             <article className="source-document"><Markdown>{workspace.source.content}</Markdown>{workspace.source.content_truncated && <div className="notice">原文不完整，请检查接入状态后重新读取。</div>}</article>
           </section>
+          {sourceAssociations("source")}
           <div className="supporting-tools">
           <AnnotationComposer workspace={workspace} jobs={jobs.data ?? []} onDirty={(dirty) => trackInput("annotation", dirty)} onCreated={() => void jobs.refetch()}/>
-          <div className="next-step"><button className="text-button" onClick={() => onView("materials")}><Layers3 size={15}/>查看相关材料<ArrowRight size={14}/></button>{selected.length > 0 && <span>已选 {selected.length} 条</span>}</div>
+          <div className="next-step"><button className="text-button" onClick={() => onView("materials")}><Layers3 size={15}/>查看相关材料<ArrowRight size={14}/></button>{selectedCount > 0 && <span>已选 {selectedCount} 条</span>}</div>
           {decisions.some((item) => item.answer) && <details className="quiet-disclosure"><summary>已作出的判断 <span>{decisions.filter((item) => item.answer).length}</span></summary>{decisions.filter((item) => item.answer).map((item) => <div key={item.id} className="answered-decision"><strong>{item.question}</strong><p>{item.answer}</p><span>{date(item.answeredAt ?? undefined, true)} · 已共享给 Codex</span></div>)}</details>}
           <details className="quiet-disclosure"><summary><MessageCircle size={15}/>讨论与补充<span>{workspace.messages.length || ""}</span></summary><ChatPanel onDirty={(dirty) => trackInput("chat", dirty)} workspace={latestWorkspace} aiConfigured={aiConfigured} flush={() => editor.session.flush()} onUpdate={update} onApply={(content, mode) => { if (mode === "append") editor.session.append(content); else editor.session.edit(content); setPreview(false); onView("draft"); }}/></details>
           </div>
         </div>
         <div className="materials-view" hidden={view !== "materials"}><div className="section-heading"><h2>本次加工的材料</h2><button className="button secondary small" onClick={() => setMaterialSearch(true)}><Search size={14}/>查找</button></div><p className="section-description">你选用的内容会成为共享上下文。展开原文核对，再决定是否采用。</p>
           {proposed.length > 0 && <section className="candidate-section"><div className="material-group-label"><span>待你选择</span><span>{proposed.length} 条推荐</span></div>{proposed.map((item) => materialCard(item.memo, item))}</section>}
-          <section><div className="material-group-label"><span>已选用</span><span>{selected.length} 条</span></div>{selected.length ? selected.map((memo) => materialCard(memo, candidates.find((item) => item.memo.id === memo.id))) : <div className="empty-state small-empty"><Layers3 size={25}/><h3>先给这次思考找些依据</h3><p>在 Codex 中说“为当前笔记找材料，注明推荐理由”，也可以自己查找。</p><button className="text-button" onClick={() => setMaterialSearch(true)}>查找相关笔记<ArrowRight size={14}/></button></div>}</section>
+          <section><div className="material-group-label"><span>已选用</span><span>{selectedCount} 条</span></div>{selectedCount ? <>{selected.map((memo) => materialCard(memo, candidates.find((item) => item.memo.id === memo.id)))}{collectorMaterials.map((material) => <CollectorMaterialCard key={material.article.id} material={material} disabled={!!busy} configured={collectorConfigured} onRefresh={attachSource} onRemove={removeSource} renderContent={(content) => <Markdown>{content}</Markdown>}/>)}</> : <div className="empty-state small-empty"><Layers3 size={25}/><h3>先给这次思考找些依据</h3><p>在 Codex 中说“为当前笔记找材料，注明推荐理由”，也可以自己查找。</p><button className="text-button" onClick={() => setMaterialSearch(true)}>查找相关笔记<ArrowRight size={14}/></button></div>}</section>
+          {sourceAssociations("all")}
           {dismissed.length > 0 && <details className="quiet-disclosure"><summary>暂时不用 <span>{dismissed.length}</span></summary>{dismissed.map((item) => materialCard(item.memo, item))}</details>}
         </div>
         <div className="draft-view" hidden={view !== "draft"}><div className="editor-toolbar"><div className="segmented"><button className={!preview ? "selected" : ""} onClick={() => setPreview(false)}>编辑</button><button className={preview ? "selected" : ""} onClick={() => setPreview(true)}>阅读</button></div></div>

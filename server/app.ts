@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { z, ZodError } from 'zod';
 import { createWorkspaceSchema, updateDraftSchema, materialsSchema, messageSchema, aiSchema, publishSchema, settingsSchema, versionSchema,
-  contextSchema, goalSchema, candidatesSchema, candidateChoiceSchema, decisionSchema, decisionAnswerSchema } from '../shared/contracts.js';
+  contextSchema, goalSchema, candidatesSchema, candidateChoiceSchema, decisionSchema, decisionAnswerSchema, sourceAttachSchema } from '../shared/contracts.js';
 import type { Actor, Change } from '../shared/contracts.js';
 import { AppError } from './errors.js';
 import { ProviderError } from './provider-types.js';
@@ -54,7 +54,7 @@ export async function createApp({ service, webRoot, flomoConfigured, periodicRef
   });
   const idOf = (request: FastifyRequest) => z.object({id:z.string().min(1)}).parse(request.params).id;
   const root = '/api/v1';
-  app.get(`${root}/health`, async () => ({ok:true, aiConfigured:Boolean(service.ai), flomoConfigured:flomoConfigured ? await flomoConfigured() : true}));
+  app.get(`${root}/health`, async () => ({ok:true, aiConfigured:Boolean(service.ai), collectorConfigured:Boolean(service.collector), flomoConfigured:flomoConfigured ? await flomoConfigured() : true}));
   app.get(`${root}/settings`, () => store.getSettings());
   app.put(`${root}/settings`, request => store.setSettings(settingsSchema.parse(request.body), actor(request)));
   app.get(`${root}/context`, () => store.getContext());
@@ -74,6 +74,17 @@ export async function createApp({ service, webRoot, flomoConfigured, periodicRef
     return service.createWorkspace(body.memoId, body.title, actor(request));
   });
   app.get(`${root}/workspaces/:id`, request => store.getWorkspace(idOf(request)));
+  app.get(`${root}/workspaces/:id/sources`, request => service.resolveSources(idOf(request)));
+  app.get(`${root}/sources/:id`, request => service.getSource(idOf(request)));
+  app.post(`${root}/workspaces/:id/sources`, request => {
+    const body = sourceAttachSchema.parse(request.body);
+    return service.attachSource(idOf(request),body.articleId,body.baseVersion,actor(request));
+  });
+  app.delete(`${root}/workspaces/:id/sources/:articleId`, request => {
+    const {id,articleId} = z.object({id:z.string().min(1),articleId:z.string().min(1).max(500)}).parse(request.params);
+    const {baseVersion} = z.object({baseVersion:versionSchema}).strict().parse(request.body);
+    return service.detachSource(id,articleId,baseVersion,actor(request));
+  });
   app.get(`${root}/workspaces/:id/revisions`, request => store.listDraftRevisions(idOf(request)));
   app.patch(`${root}/workspaces/:id/goal`, request => {
     const body = goalSchema.parse(request.body);

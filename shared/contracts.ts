@@ -12,6 +12,35 @@ export interface Memo {
   content_truncated: boolean;
   linked_memos: string[];
 }
+export interface CollectorArticleSummary {
+  id: string;
+  title: string;
+  sourceUrl: string;
+  summary: string;
+  digest: string;
+  updatedAt: string;
+}
+export interface CollectorArticle extends CollectorArticleSummary {
+  content: string;
+  contentTruncated: boolean;
+}
+export interface CollectorMaterial {
+  kind: 'collector';
+  article: CollectorArticle;
+  memoIds: string[];
+  fetchedAt: string;
+}
+export interface SourceResolution {
+  configured: boolean;
+  truncated: boolean;
+  items: {
+    url: string;
+    memoIds: string[];
+    status: 'matched' | 'missing' | 'ambiguous' | 'unavailable';
+    articles: CollectorArticleSummary[];
+    message?: string;
+  }[];
+}
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -63,6 +92,7 @@ export interface Workspace {
   draft: string;
   version: number;
   materials: Memo[];
+  collectorMaterials?: CollectorMaterial[];
   messages: Message[];
   createdAt: string;
   updatedAt: string;
@@ -126,6 +156,7 @@ export const versionSchema = z.number().int().positive();
 export const createWorkspaceSchema = z.object({ memoId: z.string().min(1), title: z.string().min(1).max(200).optional() }).strict();
 export const updateDraftSchema = z.object({ draft: z.string().max(500_000), baseVersion: versionSchema, summary: z.string().max(500).optional() }).strict();
 export const materialsSchema = z.object({ memoIds: z.array(z.string().min(1)).max(30), baseVersion: versionSchema }).strict();
+export const sourceAttachSchema = z.object({ articleId:z.string().min(1).max(500), baseVersion:versionSchema }).strict();
 export const messageSchema = z.object({ role: z.enum(['user', 'assistant']), content: z.string().min(1).max(100_000), baseVersion: versionSchema }).strict();
 export const aiSchema = z.object({ prompt: z.string().min(1).max(30_000), baseVersion: versionSchema, idempotencyKey: z.string().min(1).max(200) }).strict();
 export const publishSchema = z.object({ baseVersion: versionSchema, idempotencyKey: z.string().min(1).max(200) }).strict();

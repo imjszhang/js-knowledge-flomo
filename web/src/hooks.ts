@@ -56,6 +56,8 @@ export function useChanges() {
       void client.invalidateQueries({ queryKey: ["settings"] });
       void client.invalidateQueries({ queryKey: ["context"] });
       void client.invalidateQueries({ queryKey: ["revisions"] });
+      void client.invalidateQueries({ queryKey: ["sources"] });
+      void client.invalidateQueries({ queryKey: ["health"] });
       void api
         .changes(cursor.current)
         .then((changes) => changes.forEach(invalidate))

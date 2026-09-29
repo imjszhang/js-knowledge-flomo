@@ -1,5 +1,6 @@
 import type {
   ActiveContext,
+  CollectorArticle,
   DraftRevision,
   MaterialCandidate,
   WorkbenchView,
@@ -8,6 +9,7 @@ import type {
   Memo,
   SearchResult,
   Settings,
+  SourceResolution,
   TagResult,
   Workspace,
 } from "../../shared/contracts";
@@ -35,7 +37,8 @@ export async function request<T>(
       "X-Workbench-Actor": "web",
       ...options.headers,
     },
-  }).catch(() => {
+  }).catch((error: unknown) => {
+    if (error instanceof Error && error.name === "AbortError") throw error;
     throw new ApiError("CONNECTION_UNAVAILABLE", "暂时无法连接工作台，页面中的输入已保留。请恢复连接后重试。", 0);
   });
   const body = await response.json().catch(() => null);
@@ -55,7 +58,7 @@ function mutation<T>(path: string, body: unknown, method = "POST") {
 
 export const api = {
   health: () =>
-    request<{ ok: boolean; aiConfigured: boolean; flomoConfigured: boolean }>(
+    request<{ ok: boolean; aiConfigured: boolean; flomoConfigured: boolean; collectorConfigured: boolean }>(
       "/health",
     ),
   settings: () => request<Settings>("/settings"),
@@ -81,6 +84,14 @@ export const api = {
   revisions: (id: string) => request<DraftRevision[]>(`/workspaces/${id}/revisions`),
   workspaces: () => request<Workspace[]>("/workspaces"),
   workspace: (id: string) => request<Workspace>(`/workspaces/${id}`),
+  sources: (id: string, signal?: AbortSignal) =>
+    request<SourceResolution>(`/workspaces/${encodeURIComponent(id)}/sources`, { signal }),
+  source: (articleId: string, signal?: AbortSignal) =>
+    request<CollectorArticle>(`/sources/${encodeURIComponent(articleId)}`, { signal }),
+  attachSource: (id: string, articleId: string, baseVersion: number) =>
+    mutation<Workspace>(`/workspaces/${encodeURIComponent(id)}/sources`, { articleId, baseVersion }),
+  removeSource: (id: string, articleId: string, baseVersion: number) =>
+    mutation<Workspace>(`/workspaces/${encodeURIComponent(id)}/sources/${encodeURIComponent(articleId)}`, { baseVersion }, "DELETE"),
   createWorkspace: (memoId: string) =>
     mutation<Workspace>("/workspaces", { memoId }),
   draft: (id: string, draft: string, baseVersion: number) =>

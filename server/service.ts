@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { Actor, Job, MaterialCandidate, MaterialRelation, Memo, Workspace } from '../shared/contracts.js';
+import type { Actor, Job, MaterialCandidate, MaterialRelation, Memo, SourceResolution, Workspace } from '../shared/contracts.js';
 import type { AIProvider, FlomoProvider } from './provider-types.js';
+import { extractSourceUrls, type CollectorProvider } from './collector.js';
 import { AppError } from './errors.js';
 import { Store } from './store.js';
 
@@ -12,7 +13,7 @@ export class WorkbenchService {
   private locks = new Map<string, Promise<unknown>>();
   private tasks = new Set<Promise<void>>();
   private controllers = new Set<AbortController>();
-  constructor(readonly store: Store, readonly flomo: FlomoProvider, readonly ai?: AIProvider) {}
+  constructor(readonly store: Store, readonly flomo: FlomoProvider, readonly ai?: AIProvider, readonly collector?: CollectorProvider) {}
 
   private async locked<T>(id: string, operation: () => Promise<T>): Promise<T> {
     const result = (this.locks.get(id) ?? Promise.resolve()).then(operation);
@@ -70,7 +71,7 @@ export class WorkbenchService {
     const current = await this.store.getWorkspace(id);
     this.checkVersion(current, baseVersion);
     const ids = [...new Set(memoIds)].filter(memoId => memoId !== current.memoId);
-    if (ids.length > 30) throw new AppError('MATERIAL_LIMIT', '每次加工最多选用 30 条材料');
+    if (ids.length + (current.collectorMaterials?.length ?? 0) > 30) throw new AppError('MATERIAL_LIMIT', '每次加工最多选用 30 条材料');
     const materials: Memo[] = [];
     for (const memoId of ids) materials.push(await this.flomo.get(memoId));
     return this.store.updateWorkspace(id, baseVersion, actor, 'materials', value => {
@@ -107,9 +108,63 @@ export class WorkbenchService {
       if (!candidate) throw new AppError('NOT_FOUND', '候选材料不存在', 404);
       const materials = workspace.materials.filter(memo => memo.id !== memoId);
       if (status === 'selected') materials.push(candidate.memo);
-      if (materials.length > 30) throw new AppError('MATERIAL_LIMIT', '每次加工最多选用 30 条材料');
+      if (materials.length + (workspace.collectorMaterials?.length ?? 0) > 30) throw new AppError('MATERIAL_LIMIT', '每次加工最多选用 30 条材料');
       return {...workspace,materials,materialCandidates:workspace.materialCandidates!.map(value => value.memo.id === memoId ? {...value,status} : value)};
     }, status === 'selected' ? '选入了一条材料' : status === 'dismissed' ? '暂不采用一条材料' : '将一条材料放回候选列表');
+  }
+  private sourceLinks(workspace: Workspace): Map<string, string[]> {
+    const links = new Map<string, string[]>();
+    for (const memo of [workspace.source, ...workspace.materials]) {
+      for (const url of extractSourceUrls(memo.content)) {
+        const ids = links.get(url) ?? [];
+        if (!ids.includes(memo.id)) ids.push(memo.id);
+        links.set(url, ids);
+      }
+    }
+    return links;
+  }
+  async resolveSources(id: string): Promise<SourceResolution> {
+    const workspace = await this.store.getWorkspace(id);
+    if (!this.collector) return { configured:false, truncated:false, items:[] };
+    const links = [...this.sourceLinks(workspace)];
+    const selected = links.slice(0, 20);
+    const items: SourceResolution['items'] = [];
+    // Bound fan-out so opening a note cannot trigger an unbounded library scan.
+    for (let offset = 0; offset < selected.length; offset += 4) {
+      items.push(...await Promise.all(selected.slice(offset, offset + 4).map(async ([url, memoIds]): Promise<SourceResolution['items'][number]> => {
+        try {
+          const articles = await this.collector!.findByUrl(url);
+          return {url,memoIds,articles,status:articles.length === 1 ? 'matched' : articles.length ? 'ambiguous' : 'missing'};
+        } catch {
+          return {url,memoIds,articles:[],status:'unavailable',message:'暂时无法查询收藏库，请检查连接后重试'};
+        }
+      })));
+    }
+    return { configured:true, truncated:links.length > selected.length, items };
+  }
+  getSource(articleId: string) {
+    if (!this.collector) throw new AppError('COLLECTOR_NOT_CONFIGURED', '尚未配置收藏库连接，请设置 COLLECTOR_BASE_URL', 503);
+    return this.collector.get(articleId);
+  }
+  async attachSource(id: string, articleId: string, baseVersion: number, actor: Actor): Promise<Workspace> {
+    const workspace = await this.store.getWorkspace(id);
+    this.checkVersion(workspace, baseVersion);
+    const previous = workspace.collectorMaterials ?? [];
+    if (!previous.some(item => item.article.id === articleId) && previous.length + workspace.materials.length >= 30)
+      throw new AppError('MATERIAL_LIMIT', '每次加工最多选用 30 条材料');
+    const article = await this.getSource(articleId);
+    if (article.contentTruncated || !article.content.trim())
+      throw new AppError('COLLECTOR_CONTENT_UNAVAILABLE', '收藏记录暂无完整正文，无法加入加工材料', 422);
+    const memoIds = [...new Set([...(previous.find(item => item.article.id === articleId)?.memoIds ?? []), ...(this.sourceLinks(workspace).get(article.sourceUrl) ?? [])])];
+    const snapshot = {kind:'collector' as const,article,memoIds,fetchedAt:new Date().toISOString()};
+    return this.store.updateWorkspace(id, baseVersion, actor, 'sources', value => ({...value,
+      collectorMaterials:[...(value.collectorMaterials ?? []).filter(item => item.article.id !== articleId),snapshot],
+    }), previous.some(item => item.article.id === articleId) ? '刷新了收藏原文快照' : '选入了一篇收藏原文');
+  }
+  detachSource(id: string, articleId: string, baseVersion: number, actor: Actor): Promise<Workspace> {
+    return this.store.updateWorkspace(id,baseVersion,actor,'sources',workspace => ({...workspace,
+      collectorMaterials:(workspace.collectorMaterials ?? []).filter(item => item.article.id !== articleId),
+    }), '移出了一篇收藏原文');
   }
   createDecision(id: string, question: string, options: string[], baseVersion: number, actor: Actor): Promise<Workspace> {
     return this.store.updateWorkspace(id,baseVersion,actor,'decision',workspace => ({...workspace,

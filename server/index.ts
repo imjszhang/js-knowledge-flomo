@@ -7,6 +7,7 @@ import { WorkbenchService } from './service.js';
 import { createFlomoProvider, createAIProvider, isAIConfigured, isFlomoConfigured } from './providers.js';
 import { createApp } from './app.js';
 import { acquireDatabaseLock } from './lock.js';
+import { createCollectorProvider } from './collector.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = existsSync(resolve(here,'../package.json')) ? resolve(here,'..') : resolve(here,'../..');
@@ -17,7 +18,7 @@ const databaseLock = await acquireDatabaseLock(requestedDbPath);
 let store: Store;
 try { store = await Store.open(databaseLock.dbPath); }
 catch (error) { await databaseLock.release(); throw error; }
-const service = new WorkbenchService(store, createFlomoProvider(), isAIConfigured() ? createAIProvider() : undefined);
+const service = new WorkbenchService(store, createFlomoProvider(), isAIConfigured() ? createAIProvider() : undefined, createCollectorProvider());
 await service.recover();
 const app = await createApp({service, webRoot:resolve(projectRoot,'dist/web'),flomoConfigured:isFlomoConfigured,periodicRefresh:true});
 let closing = false;
