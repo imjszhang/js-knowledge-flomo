@@ -201,3 +201,19 @@ test('unlinked filter uses memo relationships, retains external links and trunca
   assert.deepEqual((await provider.search({unlinkedOnly:true})).memos.map(m=>m.id).sort(),['external','truncated']);
   assert.equal((await provider.search({unlinkedOnly:false})).memos.length,3);
 });
+
+
+test('unlinked filter excludes incoming references across tags and dates but ignores semantic matches', async () => {
+  const provider = createFlomoProvider({callTool:async (name,args) => {
+    if (name === 'tag_tree') return {tags:[]};
+    if (args.keywords === 'source') {
+      assert.equal(args.tag,undefined);
+      assert.equal(args.start_date,undefined);
+      return {memos:[memo('annotation',{tags:['想法'],linked_memos:['source']})]};
+    }
+    if (args.keywords === 'external') return {memos:[memo('semantic-match',{linked_memos:['someone-else']})]};
+    return {memos:[memo('source',{tags:['概要']}),memo('external',{tags:['概要'],content:'https://example.com'})]};
+  }});
+  const result = await provider.search({tag:'概要',startDate:'2026-09-01',unlinkedOnly:true});
+  assert.deepEqual(result.memos.map(m=>m.id),['external']);
+});

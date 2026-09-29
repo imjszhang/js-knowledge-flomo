@@ -175,7 +175,23 @@ export function createFlomoProvider(options: FlomoProviderOptions = {}): FlomoPr
       }
       const all = [...memos.values()].sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id));
       possiblyLimited ||= all.length > limit;
-      return { memos: all.slice(0, limit), limit, possiblyLimited, scope: 'remote-search' as const, checkedAt: new Date().toISOString() };
+      const candidates = all.slice(0, limit);
+      if (params.unlinkedOnly) {
+        // linked_memos contains outgoing links only. Search globally for incoming
+        // references: the referring note may have another tag or creation date.
+        // Verify exact IDs because upstream keyword search can return semantic matches.
+        const incoming = new Set<string>();
+        for (let offset = 0; offset < candidates.length; offset += 4) {
+          await Promise.all(candidates.slice(offset, offset + 4).map(async memo => {
+            const result = await call('memo_search', {keywords:memo.id, limit:50});
+            const rows = memoRows(result).map(normalizeMemo);
+            possiblyLimited ||= rows.length >= 50 || record(result).truncated === true;
+            if (rows.some(other => other.id !== memo.id && other.linked_memos.includes(memo.id))) incoming.add(memo.id);
+          }));
+        }
+        return {memos:candidates.filter(memo => !incoming.has(memo.id)), limit, possiblyLimited, scope:'remote-search' as const, checkedAt:new Date().toISOString()};
+      }
+      return { memos: candidates, limit, possiblyLimited, scope: 'remote-search' as const, checkedAt: new Date().toISOString() };
     }),
     create: content => run(async call => {
       const result = record(await call('memo_create', { content, format: 'markdown' }));
