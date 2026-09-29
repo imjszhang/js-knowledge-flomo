@@ -30,7 +30,7 @@ function workspace(version = 1, draft = "原始草稿"): Workspace {
   };
 }
 
-function setup(initial = workspace()) {
+function setup(initial = workspace(), holdExternalUpdates = false) {
   let remote = initial;
   const saves: { text: string; version: number }[] = [];
   const session = new DraftSession(initial, {
@@ -41,6 +41,7 @@ function setup(initial = workspace()) {
     },
     read: async () => remote,
     onSaved: () => {},
+    holdExternalUpdates,
   });
   return { session, saves };
 }
@@ -181,4 +182,71 @@ test("out of order external responses cannot rewind acknowledged versions", () =
   session.receive(workspace(3, "迟到的结果"));
   assert.equal(session.getSnapshot().draft, "最新");
   assert.equal(session.getSnapshot().acknowledged.version, 5);
+});
+
+test("companion editor keeps externally changed text pending until explicit review", async () => {
+  const { session, saves } = setup(workspace(), true);
+  session.receive(workspace(2, "Codex 已补充一段"));
+  assert.equal(session.getSnapshot().draft, "原始草稿");
+  assert.equal(session.getSnapshot().review?.draft, "Codex 已补充一段");
+  assert.equal(session.dirty, false);
+  await assert.rejects(session.flush(), /待查看/);
+  assert.deepEqual(saves, []);
+  session.acceptReview();
+  assert.equal(session.getSnapshot().draft, "Codex 已补充一段");
+  assert.equal(session.getSnapshot().review, null);
+  assert.equal((await session.flush()).version, 2);
+});
+
+test("typing while review is pending promotes the remote version to a conflict", async () => {
+  const { session, saves } = setup(workspace(), true);
+  session.receive(workspace(2, "Codex 的修改"));
+  session.edit("我继续写的内容");
+  assert.equal(session.getSnapshot().review, null);
+  assert.equal(session.getSnapshot().conflict?.version, 2);
+  await assert.rejects(session.flush(), /冲突/);
+  session.resolve("local");
+  await session.flush();
+  assert.deepEqual(saves, [{ text: "我继续写的内容", version: 2 }]);
+});
+
+test("late metadata cannot rewind pending review, and newer metadata updates its version", () => {
+  const { session } = setup(workspace(), true);
+  session.receive(workspace(3, "修改后的正文"));
+  session.receive({ ...workspace(2), goal: "迟到的目标" });
+  assert.equal(session.getSnapshot().review?.version, 3);
+  assert.equal(session.getSnapshot().acknowledged.version, 1);
+  session.receive({ ...workspace(4, "修改后的正文"), goal: "补充例子" });
+  assert.equal(session.getSnapshot().review?.version, 4);
+  assert.equal(session.getSnapshot().review?.goal, "补充例子");
+  session.acceptReview();
+  assert.equal(session.getSnapshot().acknowledged.version, 4);
+});
+
+test("undoing typing retains the pending external change for review", () => {
+  const { session } = setup(workspace(), true);
+  session.receive(workspace(2, "外部改动"));
+  session.edit("临时输入");
+  session.edit("原始草稿");
+  assert.equal(session.getSnapshot().conflict, null);
+  assert.equal(session.getSnapshot().review?.draft, "外部改动");
+  assert.equal(session.dirty, false);
+});
+
+test("a clean save followed immediately by an external revision still requires review", async () => {
+  let resolveSave!: (value: Workspace) => void;
+  const session = new DraftSession(workspace(), {
+    holdExternalUpdates: true,
+    save: () => new Promise(resolve => { resolveSave = resolve; }),
+    read: async () => workspace(),
+    onSaved: () => {},
+  });
+  session.edit("我的修改");
+  const pending = session.flush();
+  session.receive(workspace(3, "Codex 接着改"));
+  resolveSave(workspace(2, "我的修改"));
+  await assert.rejects(pending, /待查看/);
+  assert.equal(session.getSnapshot().draft, "我的修改");
+  assert.equal(session.getSnapshot().review?.version, 3);
+  assert.equal(session.dirty, false);
 });

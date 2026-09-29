@@ -33,20 +33,14 @@ import {
   Terminal,
   X,
 } from "lucide-react";
-import type { Job, Memo, Settings, Workspace } from "../../shared/contracts";
+import type { ActiveContext, Decision, DraftRevision, Job, MaterialCandidate, Memo, Settings, WorkbenchView, Workspace } from "../../shared/contracts";
 import { pinnedTags } from "../../shared/contracts";
 import { api, messageOf, sourceUrl } from "./api";
 import { useChanges, useDebounce, useDraft } from "./hooks";
+import InlineDiff from "./InlineDiff";
 
 type LeaveGuard = () => Promise<unknown>;
-const descriptions: Record<string, string> = {
-  待编: "给还没想完的念头，留一点生长的空间。",
-  概要: "读过的内容，在这里重新相遇。",
-  想法: "留下自己的判断，也给它改变的机会。",
-  摘要: "那些你特意留下的句子，值得再读一次。",
-  资源: "当新的问题出现，找到用得上的积累。",
-};
-const tagIcons = [FileText, BookOpen, Sparkles, Layers3, Link2];
+const viewLabels: Record<WorkbenchView, string> = { note: "笔记", materials: "材料", draft: "草稿" };
 
 function date(value: string | undefined, detailed = false) {
   if (!value) return "尚未检查";
@@ -144,11 +138,13 @@ function Modal({
   children,
   onClose,
   wide = false,
+  drawer = false,
 }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
   wide?: boolean;
+  drawer?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const close = useRef(onClose);
@@ -198,13 +194,13 @@ function Modal({
   }, []);
   return createPortal(
     <div
-      className="modal-backdrop"
+      className={`modal-backdrop ${drawer ? "drawer-backdrop" : ""}`}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
     >
       <div
-        className={`modal ${wide ? "wide" : ""}`}
+        className={`modal ${wide ? "wide" : ""} ${drawer ? "drawer-panel" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -228,239 +224,117 @@ export function App() {
   const client = useQueryClient();
   const health = useQuery({ queryKey: ["health"], queryFn: api.health });
   const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
-  const workspaces = useQuery({
-    queryKey: ["workspaces"],
-    queryFn: api.workspaces,
-  });
-  const [workspaceId, setWorkspaceId] = useState(() =>
-    new URLSearchParams(location.search).get("workspace"),
-  );
+  const workspaces = useQuery({ queryKey: ["workspaces"], queryFn: api.workspaces });
+  const context = useQuery({ queryKey: ["context"], queryFn: api.context });
+  const initialId = useRef(new URLSearchParams(location.search).get("workspace"));
+  const [workspaceId, setWorkspaceId] = useState<string | null>(initialId.current);
+  const [view, setView] = useState<WorkbenchView>("note");
+  const [ready, setReady] = useState(false);
   const [tag, setTag] = useState<string>("待编");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [librarySection, setLibrarySection] = useState<"notes" | "workspaces">("notes");
   const [navigationError, setNavigationError] = useState("");
   const guard = useRef<LeaveGuard | null>(null);
+  const initialized = useRef(false);
+  const navigating = useRef(false);
   const connection = useChanges();
   const selectedWorkspace = useQuery({
     queryKey: ["workspace", workspaceId],
-    queryFn: () => api.workspace(workspaceId!),
-    enabled: !!workspaceId,
+    queryFn: () => api.workspace(workspaceId!), enabled: !!workspaceId,
   });
   const tags = settings.data?.pinnedTags ?? [...pinnedTags];
 
-  async function navigate(id: string | null, nextTag = tag, replace = false) {
+  function selectLocal(id: string | null, nextView: WorkbenchView, replace = false) {
+    setWorkspaceId(id); setView(nextView); setLibraryOpen(false);
+    const url = new URL(location.href);
+    if (id) url.searchParams.set("workspace", id);
+    else url.searchParams.delete("workspace");
+    history[replace ? "replaceState" : "pushState"]({}, "", url);
+  }
+  async function navigate(id: string | null, nextView: WorkbenchView = "note", replace = false, adopt = false) {
+    if (navigating.current) return;
+    navigating.current = true;
     try {
       if (id !== workspaceId && guard.current) await guard.current();
-      setNavigationError("");
-      setWorkspaceId(id);
-      setTag(nextTag);
-      setSidebarOpen(false);
-      const url = new URL(location.href);
-      if (id) url.searchParams.set("workspace", id);
-      else url.searchParams.delete("workspace");
-      history[replace ? "replaceState" : "pushState"]({}, "", url);
+      if (!adopt) {
+        const current = client.getQueryData<ActiveContext>(["context"]) ?? await api.context();
+        if (current.workspaceId !== id || current.view !== nextView) {
+          const saved = await api.setContext(id, nextView, current.revision);
+          client.setQueryData(["context"], saved);
+        }
+      }
+      selectLocal(id, nextView, replace); setNavigationError("");
     } catch (error) {
-      setNavigationError(`切换前需要保存当前草稿：${messageOf(error)}`);
-    }
+      setNavigationError(messageOf(error));
+      const restored = new URL(location.href);
+      if (workspaceId) restored.searchParams.set("workspace", workspaceId);
+      else restored.searchParams.delete("workspace");
+      history.replaceState({}, "", restored);
+      void client.invalidateQueries({ queryKey: ["context"] });
+    } finally { navigating.current = false; }
   }
-
+  useEffect(() => {
+    if (initialized.current || !context.data || !workspaces.data) return;
+    initialized.current = true;
+    const chosen = initialId.current ?? context.data.workspaceId ?? workspaces.data[0]?.id ?? null;
+    const nextView = chosen === context.data.workspaceId ? context.data.view : "note";
+    selectLocal(chosen, nextView, true); setReady(true);
+    if (chosen !== context.data.workspaceId) {
+      void api.setContext(chosen, nextView, context.data.revision)
+        .then((saved) => client.setQueryData(["context"], saved))
+        .catch((error) => { setNavigationError(`当前工作未同步：${messageOf(error)}`); void context.refetch(); });
+    }
+  }, [context.data, workspaces.data]);
   useEffect(() => {
     const pop = () => {
       const nextId = new URLSearchParams(location.search).get("workspace");
       void (async () => {
         try {
-          if (guard.current) await guard.current();
-          setWorkspaceId(nextId);
-          setNavigationError("");
+          if (guard.current && nextId !== workspaceId) await guard.current();
+          await navigate(nextId, "note", true);
         } catch (error) {
-          const restored = new URL(location.href);
-          if (workspaceId) restored.searchParams.set("workspace", workspaceId);
-          else restored.searchParams.delete("workspace");
-          history.pushState({}, "", restored);
-          setNavigationError(`草稿仍在当前页面：${messageOf(error)}`);
+          selectLocal(workspaceId, view, true); setNavigationError(messageOf(error));
         }
       })();
     };
-    addEventListener("popstate", pop);
-    return () => removeEventListener("popstate", pop);
-  }, [workspaceId]);
-
+    addEventListener("popstate", pop); return () => removeEventListener("popstate", pop);
+  }, [workspaceId, view]);
   async function openMemo(memo: Memo) {
-    const created = await api.createWorkspace(memo.id);
-    client.setQueryData(["workspace", created.id], created);
+    if (guard.current) await guard.current();
+    const existing = workspaces.data?.find((item) => item.memoId === memo.id);
+    const opened = existing ?? await api.createWorkspace(memo.id);
+    client.setQueryData(["workspace", opened.id], opened);
     await client.invalidateQueries({ queryKey: ["workspaces"] });
-    await navigate(created.id);
+    await navigate(opened.id);
   }
-
+  const offered = ready && context.data && (context.data.workspaceId !== workspaceId || context.data.view !== view) ? context.data : null;
   return (
-    <div className={`app-shell ${sidebarOpen ? "sidebar-open" : ""}`}>
-      {sidebarOpen && (
-        <button
-          className="sidebar-scrim"
-          aria-label="收起导航"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-      <aside className="sidebar">
-        <button
-          className="brand"
-          onClick={() => void navigate(null)}
-          aria-label="返回知识工作台"
-        >
-          <span className="brand-mark">
-            <span />
-            <span />
-            <span />
-          </span>
-          <span>
-            flomo<span className="brand-sub">知识工作台</span>
-          </span>
+    <div className="companion-shell">
+      <header className="companion-header">
+        <button className="workspace-switcher" onClick={() => { setLibrarySection("notes"); setLibraryOpen(true); }} aria-label="选择笔记或切换工作区">
+          <span className="brand-dot"><BookOpen size={16} /></span>
+          <span>flomo 工作台</span><ChevronDown size={14} />
         </button>
-        <div className="sidebar-label">
-          我的知识入口 <span>PINNED</span>
+        <div className="header-status" title={connection.connected ? "Web、CLI 和 MCP 共用当前工作" : "连接中，正在重连"}>
+          <span className={`status-dot ${connection.connected ? "online" : ""}`} /><span>{connection.connected ? "已连接" : "重连中"}</span>
         </div>
-        <nav aria-label="置顶标签">
-          {tags.map((item, index) => {
-            const Icon = tagIcons[index % tagIcons.length];
-            return (
-              <button
-                key={item}
-                className={`nav-item ${!workspaceId && tag === item ? "active" : ""}`}
-                onClick={() => void navigate(null, item)}
-              >
-                <Icon size={18} />
-                <span>{item}</span>
-                {!workspaceId && tag === item && <span className="nav-dot" />}
-              </button>
-            );
-          })}
-          <button
-            className={`nav-item ${!workspaceId && tag === "" ? "active" : ""}`}
-            onClick={() => void navigate(null, "")}
-          >
-            <Hash size={18} />
-            <span>全部笔记</span>
-          </button>
-        </nav>
-        <div className="sidebar-label workspace-label">
-          加工中的思考 <span>{workspaces.data?.length ?? "—"}</span>
-        </div>
-        <div className="workspace-nav">
-          {workspaces.isPending ? (
-            <div className="sidebar-hint">正在读取工作区…</div>
-          ) : workspaces.isError ? (
-            <div className="sidebar-hint">
-              工作区读取失败
-              <button
-                className="text-button"
-                onClick={() => void workspaces.refetch()}
-              >
-                重试
-              </button>
-            </div>
-          ) : workspaces.data.length === 0 ? (
-            <div className="sidebar-hint">
-              打开一条笔记，
-              <br />
-              开始你的第一个工作区。
-            </div>
-          ) : (
-            workspaces.data.map((item) => (
-              <button
-                key={item.id}
-                className={`workspace-nav-item ${workspaceId === item.id ? "active" : ""}`}
-                onClick={() => void navigate(item.id)}
-              >
-                <span className="workspace-bullet" />
-                <span>{item.title || "未命名的思考"}</span>
-              </button>
-            ))
-          )}
-        </div>
-        <div className="sidebar-bottom">
-          <div
-            className="connection"
-            title={
-              connection.lastChange
-                ? `最近变更：${connection.lastChange.actor} · ${date(connection.lastChange.createdAt, true)}`
-                : "Web、CLI 和 MCP 共用工作区"
-            }
-          >
-            <span
-              className={`status-dot ${connection.connected ? "online" : ""}`}
-            />
-            {connection.connected ? "与工作台实时连接" : "连接中，将自动重连"}
-          </div>
-          <button
-            className="settings-button"
-            onClick={() => setSettingsOpen(true)}
-          >
-            <Settings2 size={16} />
-            工作台设置
-            <ArrowUpRight size={14} />
-          </button>
-          <div className="sidebar-footnote">记录是思考的开始。</div>
-        </div>
-      </aside>
-      <div className="app-main">
-        <div className="mobile-toolbar">
-          <button
-            className="icon-button"
-            onClick={() => setSidebarOpen(true)}
-            aria-label="打开导航"
-          >
-            <PanelLeftClose size={20} />
-          </button>
-          <span>flomo · 知识工作台</span>
-          <span
-            className={`status-dot ${connection.connected ? "online" : ""}`}
-          />
-        </div>
-        <ErrorBox error={navigationError} />
-        {workspaceId ? (
-          selectedWorkspace.isPending ? (
-            <Loading label="正在打开工作区…" />
-          ) : selectedWorkspace.isError ? (
-            <div className="page-error">
-              <ErrorBox
-                error={selectedWorkspace.error}
-                retry={() => void selectedWorkspace.refetch()}
-              />
-              <button
-                className="button secondary"
-                onClick={() => void navigate(null)}
-              >
-                <ArrowLeft size={15} />
-                返回笔记
-              </button>
-            </div>
-          ) : (
-            <Workbench
-              key={workspaceId}
-              workspace={selectedWorkspace.data}
-              aiConfigured={health.data?.aiConfigured ?? false}
-              setGuard={(value) => {
-                guard.current = value;
-              }}
-              onBack={() => void navigate(null)}
-            />
-          )
-        ) : (
-          <Library
-            tag={tag}
-            onOpen={openMemo}
-            flomoConfigured={health.data?.flomoConfigured}
-          />
-        )}
+        <button className="icon-button" aria-label="工作台设置" onClick={() => setSettingsOpen(true)}><Settings2 size={17} /></button>
+      </header>
+      <div className="companion-content">
+        <ErrorBox error={navigationError || context.error || workspaces.error} retry={context.isError || workspaces.isError ? () => { void context.refetch(); void workspaces.refetch(); } : undefined} />
+        {offered && <div className="notice context-notice" role="status"><div><strong>另一端切换了当前工作</strong><p>{offered.workspace?.title ?? "笔记选择"} · {viewLabels[offered.view]}</p></div><div className="inline-actions"><button className="text-button" onClick={() => void navigate(workspaceId, view, true)}>留在这里</button><button className="button secondary small" onClick={() => void navigate(offered.workspaceId, offered.view, false, true)}>跟随查看</button></div></div>}
+        {!ready && !context.isError && !workspaces.isError ? <Loading label="正在恢复当前工作…" /> : workspaceId ? (
+          selectedWorkspace.isPending ? <Loading label="正在打开笔记…" /> : !selectedWorkspace.data ? <div className="page-error"><ErrorBox error={selectedWorkspace.error} retry={() => void selectedWorkspace.refetch()} /><button className="button secondary" onClick={() => setLibraryOpen(true)}>选择其他笔记</button></div> :
+          <><ErrorBox error={selectedWorkspace.error} retry={() => void selectedWorkspace.refetch()} /><Workbench key={workspaceId} workspace={selectedWorkspace.data} view={view} onView={(next) => void navigate(workspaceId, next, true)} aiConfigured={health.data?.aiConfigured ?? false} setGuard={(value) => { guard.current = value; }} /></>
+        ) : ready ? <section className="welcome-panel"><div className="empty-icon"><FileText size={24} /></div><h1>这次想把哪条笔记想清楚？</h1><p>选一条待编，在 Codex 对话中推进。材料、你的选择和草稿会保留在这里。</p><button className="button primary" onClick={() => setLibraryOpen(true)}>选择一条笔记<ArrowRight size={15} /></button><div className="welcome-steps"><span>读笔记</span><ArrowRight size={13}/><span>选材料</span><ArrowRight size={13}/><span>完善草稿</span></div></section> : null}
       </div>
-      {settingsOpen && (
-        <SettingsDialog
-          settings={settings.data}
-          aiConfigured={health.data?.aiConfigured ?? false}
-          flomoConfigured={health.data?.flomoConfigured ?? false}
-          onClose={() => setSettingsOpen(false)}
-        />
-      )}
+      {libraryOpen && <Modal title="选择要继续的工作" onClose={() => setLibraryOpen(false)} drawer>
+        <div className="segmented drawer-tabs"><button className={librarySection === "notes" ? "selected" : ""} onClick={() => setLibrarySection("notes")}>从笔记开始</button><button className={librarySection === "workspaces" ? "selected" : ""} onClick={() => setLibrarySection("workspaces")}>继续加工 <span>{workspaces.data?.length ?? 0}</span></button></div>
+        {librarySection === "notes" ? <><nav className="tag-navigation" aria-label="置顶标签">{[...tags, ""].map((item) => <button key={item} className={tag === item ? "selected" : ""} onClick={() => setTag(item)}>{item || "全部"}</button>)}</nav><Library tag={tag} onOpen={openMemo} flomoConfigured={health.data?.flomoConfigured} /></> : <div className="workspace-list">{workspaces.data?.length ? workspaces.data.map((item) => <button key={item.id} className={`workspace-row ${item.id === workspaceId ? "selected" : ""}`} onClick={() => void navigate(item.id)}><div><strong>{item.title}</strong><p>{item.goal || excerpt(item.draft, 90)}</p><span>{date(item.updatedAt, true)} · {item.materials.length} 条材料</span></div><ArrowRight size={16}/></button>) : <div className="empty-state"><h3>还没有加工中的笔记</h3><p>从置顶标签中选择一条笔记即可开始。</p><button className="text-button" onClick={() => setLibrarySection("notes")}>选择笔记<ArrowRight size={14}/></button></div>}</div>}
+        <ErrorBox error={navigationError}/>
+      </Modal>}
+      {settingsOpen && <SettingsDialog settings={settings.data} aiConfigured={health.data?.aiConfigured ?? false} flomoConfigured={health.data?.flomoConfigured ?? false} onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }
@@ -489,29 +363,6 @@ function Library({
   });
   return (
     <main className="library">
-      <header className="library-header">
-        <div>
-          <div className="eyebrow">
-            <span className="tiny-line" />
-            YOUR KNOWLEDGE, IN PROGRESS
-          </div>
-          <h1>
-            {tag === "待编" ? (
-              <>
-                把记录，<span>慢慢想明白。</span>
-              </>
-            ) : (
-              tag || "你的全部积累"
-            )}
-          </h1>
-          <p>{descriptions[tag] ?? "带着一个问题，重新发现过去留下的线索。"}</p>
-        </div>
-        <div className="header-note">
-          收集 → 连接 → 思考
-          <br />
-          <strong>从一条笔记开始</strong>
-        </div>
-      </header>
       <div className="library-tools">
         <label className="search-input">
           <Search size={18} />
@@ -679,474 +530,150 @@ function Library({
   );
 }
 
-function Workbench({
-  workspace,
-  aiConfigured,
-  setGuard,
-  onBack,
-}: {
-  workspace: Workspace;
-  aiConfigured: boolean;
-  setGuard: (guard: LeaveGuard | null) => void;
-  onBack: () => void;
+function Workbench({ workspace, view, onView, aiConfigured, setGuard }: {
+  workspace: Workspace; view: WorkbenchView; onView: (view: WorkbenchView) => void;
+  aiConfigured: boolean; setGuard: (guard: LeaveGuard | null) => void;
 }) {
   const client = useQueryClient();
   const editor = useDraft(workspace);
-  const [panel, setPanel] = useState<"materials" | "chat">("materials");
   const [preview, setPreview] = useState(false);
-  const [sourceOpen, setSourceOpen] = useState(false);
   const [materialSearch, setMaterialSearch] = useState(false);
   const [remoteCompare, setRemoteCompare] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [publishPreview, setPublishPreview] = useState<Workspace | null>(null);
   const [publishKey, setPublishKey] = useState("");
-  const [copyLabel, setCopyLabel] = useState("复制 CLI 命令");
+  const [copyLabel, setCopyLabel] = useState("复制 Codex 读取命令");
   const [abandonJob, setAbandonJob] = useState<string | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [revisionOpen, setRevisionOpen] = useState<DraftRevision | null>(null);
+  const goalDirty = useRef(false);
+  const unsavedInputs = useRef(new Set<string>());
+  const [dirtyInputs, setDirtyInputs] = useState(new Set<string>());
+  function trackInput(key: string, dirty: boolean) {
+    if (unsavedInputs.current.has(key) === dirty) return;
+    if (dirty) unsavedInputs.current.add(key); else unsavedInputs.current.delete(key);
+    setDirtyInputs(new Set(unsavedInputs.current));
+  }
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => {
+      if (unsavedInputs.current.size) { event.preventDefault(); event.returnValue = ""; }
+    };
+    addEventListener("beforeunload", warn); return () => removeEventListener("beforeunload", warn);
+  }, []);
   const checkedOnOpen = useRef(false);
-  const jobs = useQuery({
-    queryKey: ["jobs", workspace.id],
-    queryFn: () => api.jobs(workspace.id),
-    refetchInterval: (query) =>
-      query.state.data?.some((job) => job.status === "running") ? 1500 : false,
-  });
-  const activeJobs =
-    jobs.data?.filter(
-      (job) => job.status === "running" || job.status === "uncertain",
-    ) ?? [];
-  const latestWorkspace =
-    editor.acknowledged.version > workspace.version
-      ? editor.acknowledged
-      : workspace;
+  const jobs = useQuery({ queryKey: ["jobs", workspace.id], queryFn: () => api.jobs(workspace.id), refetchInterval: (query) => query.state.data?.some((job) => job.status === "running") ? 1500 : false });
+  const revisions = useQuery({ queryKey: ["revisions", workspace.id], queryFn: () => api.revisions(workspace.id) });
+  const activeJobs = jobs.data?.filter((job) => job.status === "running" || job.status === "uncertain") ?? [];
+  const latestWorkspace = editor.acknowledged.version > workspace.version ? editor.acknowledged : workspace;
+  const candidates = latestWorkspace.materialCandidates ?? [];
+  const selected = latestWorkspace.materials;
+  const proposed = candidates.filter((item) => item.status === "proposed");
+  const dismissed = candidates.filter((item) => item.status === "dismissed");
+  const decisions = latestWorkspace.decisions ?? [];
+  const pendingDecisions = decisions.filter((item) => !item.answer);
+  const decisionsToReview = decisions.filter((item) => !item.answer || dirtyInputs.has(`decision:${item.id}`));
+  const latestRevision = revisions.data?.[0];
 
   useEffect(() => {
-    setGuard(() => editor.session.flush());
+    setGuard(async () => {
+      if (goalDirty.current) throw new Error("本次目标尚未保存，请先保存或取消编辑。");
+      if (unsavedInputs.current.size) throw new Error("还有未保存的判断或补充思考，请先保存或清空输入再切换笔记。");
+      if (editor.session.dirty) await editor.session.flush();
+    });
     return () => setGuard(null);
   }, [editor.session]);
-
   useEffect(() => {
-    if (checkedOnOpen.current || !jobs.isSuccess) return;
-    if (
-      jobs.data.some(
-        (job) =>
-          job.kind === "publish" &&
-          (job.status === "running" || job.status === "uncertain"),
-      )
-    )
-      return;
+    if (checkedOnOpen.current || !jobs.isSuccess || jobs.data.some((job) => job.kind === "publish" && (job.status === "running" || job.status === "uncertain"))) return;
     checkedOnOpen.current = true;
     if (Date.now() - Date.parse(workspace.lastCheckedAt) <= 60_000) return;
-    void api
-      .refresh(workspace.id)
-      .then(update)
-      .catch((error) =>
-        setError(
-          `打开时检查 flomo 更新失败，已保留本地草稿：${messageOf(error)}`,
-        ),
-      );
+    void api.refresh(workspace.id).then(update).catch((error) => setError(`检查 flomo 更新失败，已保留本地内容：${messageOf(error)}`));
   }, [jobs.isSuccess, jobs.data, workspace.id, workspace.lastCheckedAt]);
-
   function update(next: Workspace) {
-    client.setQueryData<Workspace>(["workspace", next.id], (previous) =>
-      !previous || previous.version <= next.version ? next : previous,
-    );
+    client.setQueryData<Workspace>(["workspace", next.id], (previous) => !previous || previous.version <= next.version ? next : previous);
     editor.session.receive(next);
     void client.invalidateQueries({ queryKey: ["workspaces"] });
+    void client.invalidateQueries({ queryKey: ["revisions", next.id] });
   }
-
   async function action(name: string, operation: () => Promise<unknown>) {
-    setBusy(name);
-    setError("");
-    try {
-      await operation();
-    } catch (error) {
-      setError(messageOf(error));
-      void client.invalidateQueries({ queryKey: ["workspace", workspace.id] });
-    } finally {
-      setBusy(null);
-    }
+    setBusy(name); setError("");
+    try { await operation(); }
+    catch (error) { setError(messageOf(error)); void client.invalidateQueries({ queryKey: ["workspace", workspace.id] }); }
+    finally { setBusy(null); }
   }
-
   async function preparePublish() {
     await action("preview", async () => {
       await editor.session.flush();
-      const latest = await api.refresh(workspace.id);
-      update(latest);
-      if (editor.session.getSnapshot().conflict)
-        throw new Error("另一端已修改草稿，请先处理冲突。");
-      setPublishPreview(latest);
-      setPublishKey(crypto.randomUUID());
+      const latest = await api.refresh(workspace.id); update(latest);
+      if (editor.session.getSnapshot().conflict || editor.session.getSnapshot().review) throw new Error("另一端已修改草稿，请先查看更新。");
+      setPublishPreview(latest); setPublishKey(crypto.randomUUID());
     });
   }
-
   async function publish() {
     if (!publishPreview) return;
     await action("publish", async () => {
-      const job = await api.publish(
-        workspace.id,
-        publishPreview.version,
-        publishKey,
-      );
-      client.setQueryData<Job[]>(["jobs", workspace.id], (previous) => [
-        job,
-        ...(previous ?? []).filter((item) => item.id !== job.id),
-      ]);
-      setPublishPreview(null);
-      void client.invalidateQueries({ queryKey: ["jobs", workspace.id] });
+      const job = await api.publish(workspace.id, publishPreview.version, publishKey);
+      client.setQueryData<Job[]>(["jobs", workspace.id], (previous) => [job, ...(previous ?? []).filter((item) => item.id !== job.id)]);
+      setPublishPreview(null); void client.invalidateQueries({ queryKey: ["jobs", workspace.id] });
     });
   }
-
+  async function chooseMaterial(memo: Memo, status: MaterialCandidate["status"]) {
+    await action("material", async () => {
+      const saved = await editor.session.flush();
+      if (candidates.some((item) => item.memo.id === memo.id)) update(await api.chooseCandidate(workspace.id, memo.id, status, saved.version));
+      else update(await api.materials(workspace.id, status === "selected" ? Array.from(new Set([...saved.materials.map((item) => item.id), memo.id])) : saved.materials.filter((item) => item.id !== memo.id).map((item) => item.id), saved.version));
+    });
+  }
+  function materialCard(memo: Memo, candidate?: MaterialCandidate) {
+    const status = candidate?.status ?? "selected";
+    return <article className={`context-card ${status}`} key={memo.id}>
+      <div className="material-meta"><span className={`relation-chip ${candidate?.relation ?? "background"}`}>{candidate ? relationLabels[candidate.relation] : "参考材料"}</span><span>{date(memo.created_at)}</span>{status === "selected" && <span className="selected-label"><Check size={12}/>已选用</span>}</div>
+      <details className="material-reading"><summary>{excerpt(memo.content, 180) || "查看材料原文"}<span className="expand-label">展开原文<ChevronDown size={12}/></span></summary><Markdown>{memo.content}</Markdown>{memo.content_truncated && <p className="scope-notice">此材料尚未读取完整，请在 flomo 中核对原文。</p>}<MemoLink memo={memo}/></details>
+      {candidate?.reason && <p className="material-reason">{candidate.reason}</p>}
+      <div className="material-actions">{status === "selected" ? <button className="text-button subdued" disabled={!!busy} onClick={() => void chooseMaterial(memo, "dismissed")}>移出本次材料</button> : <><button className="button secondary small" disabled={!!busy} onClick={() => void chooseMaterial(memo, "selected")}><Plus size={13}/>用于这次加工</button>{status === "proposed" && <button className="text-button subdued" disabled={!!busy} onClick={() => void chooseMaterial(memo, "dismissed")}>暂时不用</button>}</>}</div>
+    </article>;
+  }
+  const saveStatus = editor.saving ? "保存中…" : editor.conflict ? "有版本冲突" : editor.review ? "有新版本待查看" : editor.error ? "保存失败" : editor.dirty ? "尚未保存" : "已自动保存";
   return (
     <main className="workbench">
-      <header className="workbench-topbar">
-        <div className="breadcrumb">
-          <button
-            className="icon-button"
-            aria-label="返回笔记列表"
-            onClick={onBack}
-          >
-            <ArrowLeft size={17} />
-          </button>
-          <span>我的工作区</span>
-          <span>/</span>
-          <strong>{workspace.title}</strong>
+      <section className="current-work">
+        <div className="section-kicker">当前工作<span>v{latestWorkspace.version}</span></div>
+        <h1>{workspace.title}</h1>
+        <div className="work-meta"><MemoLink memo={workspace.source}>来源笔记</MemoLink><span>{date(workspace.source.created_at)}</span><details className="work-options"><summary aria-label="当前工作操作">更多<ChevronDown size={12}/></summary><div><button disabled={!!busy} onClick={() => void action("refresh", async () => update(await api.refresh(workspace.id)))}><RefreshCw size={13} className={busy === "refresh" ? "spin" : ""}/>检查 flomo 更新</button><button onClick={() => { void navigator.clipboard.writeText(`npm run --silent workbench -- workspace get ${workspace.id} --json`).then(() => { setCopyLabel("已复制"); setTimeout(() => setCopyLabel("复制 Codex 读取命令"), 2000); }).catch(() => setError("无法访问剪贴板，请通过当前页面地址中的工作区 ID 读取。")); }}><Terminal size={13}/>{copyLabel}</button><p>flomo 检查于 {date(latestWorkspace.lastCheckedAt, true)}</p></div></details></div>
+        <GoalEditor workspace={latestWorkspace} onUpdate={update} onDirty={(dirty) => { goalDirty.current = dirty; }} />
+      </section>
+      <nav className="work-tabs" aria-label="当前工作视图">{(["note", "materials", "draft"] as WorkbenchView[]).map((item) => <button key={item} className={view === item ? "selected" : ""} aria-current={view === item ? "page" : undefined} onClick={() => onView(item)}>{item === "note" ? <FileText size={16}/> : item === "materials" ? <Layers3 size={16}/> : <BookOpen size={16}/>}<span>{viewLabels[item]}</span>{item === "materials" && <span className="tab-count">{selected.length}{proposed.length ? ` +${proposed.length}` : ""}</span>}{item === "note" && decisionsToReview.length > 0 && <span className="tab-dot"/>}{item === "draft" && (editor.review || editor.conflict) && <span className="tab-dot"/>}</button>)}</nav>
+      <div className="work-view">
+        <ErrorBox error={error}/>
+        {editor.review && <div className="notice update-notice" role="status"><strong>Codex / 另一端更新了草稿</strong><p>{latestRevision?.actor !== "web" && latestRevision?.summary ? latestRevision.summary : "当前阅读和输入保持不变，查看后再采用新版本。"}</p><button className="text-button" onClick={() => setReviewOpen(true)}>查看草稿变化<ArrowRight size={14}/></button></div>}
+        {editor.conflict && <div className="notice conflict-notice" role="alert"><strong>另一端更新了草稿，你的输入已保留</strong><p>两份内容都在。比较后选择要保留的版本。</p><button className="text-button" onClick={() => setReviewOpen(true)}>比较并处理<ArrowRight size={14}/></button></div>}
+        {latestWorkspace.sourceChanged && <div className="notice remote-notice"><div><strong>flomo 原笔记有新内容</strong><p>本地草稿已保留，写回前需要比较。</p></div><button className="text-button" onClick={() => setRemoteCompare(true)}>比较原文变化<ArrowRight size={14}/></button></div>}
+        {activeJobs.length > 0 && <JobList jobs={activeJobs} onAbandon={setAbandonJob} onReconcile={(id) => void action("reconcile", async () => { await api.reconcile(id); await jobs.refetch(); void client.invalidateQueries({ queryKey: ["workspace", workspace.id] }); })}/>}
+        <div className="note-view" hidden={view !== "note"}>
+          <section className="decision-section" hidden={!pendingDecisions.length && ![...dirtyInputs].some(key => key.startsWith("decision:"))}><div className="section-heading"><h2>需要你判断 <span>{decisionsToReview.length}</span></h2></div><p className="section-description">选择会保留在工作区，Codex 可以接着处理。</p>{decisions.map((decision) => <DecisionCard key={decision.id} decision={decision} disabled={!!busy} onDirty={(dirty) => trackInput(`decision:${decision.id}`, dirty)} onAnswer={async (answer, expectedAnswer) => { const saved = await editor.session.flush(); if (saved.decisions?.find(item => item.id === decision.id)?.answer !== expectedAnswer) throw new Error("这条判断已被另一端更新，请先核对新答案。"); update(await api.answerDecision(workspace.id, decision.id, answer, saved.version)); }}/>)}</section>
+          <div className="section-heading"><h2>原笔记</h2><span>{workspace.source.tags.map((tag) => `#${tag}`).join(" ")}</span></div>
+          <article className="source-document"><Markdown>{workspace.source.content}</Markdown>{workspace.source.content_truncated && <div className="notice">原文不完整，请检查接入状态后重新读取。</div>}</article>
+          <div className="next-step"><span>{selected.length ? `已选 ${selected.length} 条材料，继续完善你的判断。` : "补上相关观点、案例，或一个不同的角度。"}</span><button className="text-button" onClick={() => onView("materials")}>查看材料<ArrowRight size={14}/></button></div>
+          {decisions.some((item) => item.answer) && <details className="quiet-disclosure"><summary>已作出的判断 <span>{decisions.filter((item) => item.answer).length}</span></summary>{decisions.filter((item) => item.answer).map((item) => <div key={item.id} className="answered-decision"><strong>{item.question}</strong><p>{item.answer}</p><span>{date(item.answeredAt ?? undefined, true)} · 已共享给 Codex</span></div>)}</details>}
+          <details className="quiet-disclosure"><summary><MessageCircle size={15}/>补充思考 / 使用内置 AI<span>{workspace.messages.length || ""}</span></summary><ChatPanel onDirty={(dirty) => trackInput("chat", dirty)} workspace={latestWorkspace} aiConfigured={aiConfigured} flush={() => editor.session.flush()} onUpdate={update} onApply={(content, mode) => { if (mode === "append") editor.session.append(content); else editor.session.edit(content); setPreview(false); onView("draft"); }}/></details>
         </div>
-        <div className="topbar-actions">
-          <button
-            className="button secondary"
-            disabled={!!busy}
-            onClick={() =>
-              void action("refresh", async () =>
-                update(await api.refresh(workspace.id)),
-              )
-            }
-          >
-            <RefreshCw size={14} className={busy === "refresh" ? "spin" : ""} />
-            <span>检查 flomo 更新</span>
-          </button>
-          <button
-            className="button primary"
-            disabled={
-              !!busy ||
-              !!editor.conflict ||
-              activeJobs.some((job) => job.kind === "publish")
-            }
-            onClick={() => void preparePublish()}
-          >
-            {busy === "preview" ? (
-              <Loader2 size={14} className="spin" />
-            ) : (
-              <ArrowUpRight size={15} />
-            )}
-            预览并写回
-          </button>
+        <div className="materials-view" hidden={view !== "materials"}><div className="section-heading"><h2>本次加工的材料</h2><button className="button secondary small" onClick={() => setMaterialSearch(true)}><Search size={14}/>查找</button></div><p className="section-description">你选用的内容会成为共享上下文。展开原文核对，再决定是否采用。</p>
+          {proposed.length > 0 && <section className="candidate-section"><div className="material-group-label"><span>待你选择</span><span>{proposed.length} 条推荐</span></div>{proposed.map((item) => materialCard(item.memo, item))}</section>}
+          <section><div className="material-group-label"><span>已选用</span><span>{selected.length} 条</span></div>{selected.length ? selected.map((memo) => materialCard(memo, candidates.find((item) => item.memo.id === memo.id))) : <div className="empty-state small-empty"><Layers3 size={25}/><h3>先给这次思考找些依据</h3><p>在 Codex 中说“为当前笔记找材料，注明推荐理由”，也可以自己查找。</p><button className="text-button" onClick={() => setMaterialSearch(true)}>查找相关笔记<ArrowRight size={14}/></button></div>}</section>
+          {dismissed.length > 0 && <details className="quiet-disclosure"><summary>暂时不用 <span>{dismissed.length}</span></summary>{dismissed.map((item) => materialCard(item.memo, item))}</details>}
         </div>
-      </header>
-      <div className="workspace-statusline">
-        <span>
-          <span className="status-dot online" />
-          共享工作区 · v{editor.acknowledged.version}
-        </span>
-        <span>flomo 最近检查：{date(latestWorkspace.lastCheckedAt, true)}</span>
-        <button
-          className="text-button cli-copy"
-          onClick={() => {
-            void navigator.clipboard
-              .writeText(
-                `npm run --silent workbench -- workspace get ${workspace.id} --json`,
-              )
-              .then(() => {
-                setCopyLabel("命令已复制");
-                setTimeout(() => setCopyLabel("复制 CLI 命令"), 2000);
-              })
-              .catch(() =>
-                setError(
-                  "无法访问剪贴板，可在地址栏复制工作区 ID 后通过 CLI 打开。",
-                ),
-              );
-          }}
-        >
-          <Terminal size={13} />
-          {copyLabel}
-        </button>
+        <div className="draft-view" hidden={view !== "draft"}><div className="editor-toolbar"><div className="segmented"><button className={!preview ? "selected" : ""} onClick={() => setPreview(false)}>编辑</button><button className={preview ? "selected" : ""} onClick={() => setPreview(true)}>阅读</button></div><span className={`save-status ${editor.error ? "error" : ""}`}>{editor.saving ? <Loader2 size={13} className="spin"/> : !editor.dirty && !editor.review && !editor.conflict ? <CheckCheck size={14}/> : <Circle size={8}/>} {saveStatus}</span></div>
+          <ErrorBox error={editor.error} retry={editor.error ? () => void editor.session.flush().catch(() => {}) : undefined}/>
+          {preview ? <div className="draft-preview"><Markdown>{editor.draft || "草稿还没有内容。"}</Markdown></div> : <textarea className="draft-editor" aria-label="工作草稿" value={editor.draft} onChange={(event) => editor.session.edit(event.target.value)} spellCheck={false} placeholder="写下自己的判断，或让 Codex 把讨论结果整理到这里。"/>}
+          <div className="editor-footer"><span>{editor.draft.length.toLocaleString()} 字符 · Markdown</span><span>保存在本地工作台</span></div>
+          <details className="quiet-disclosure revision-history"><summary><Clock3 size={15}/>草稿修改记录 <span>{revisions.data?.length ?? 0}</span></summary><ErrorBox error={revisions.error} retry={() => void revisions.refetch()}/>{revisions.data?.length ? revisions.data.map((revision) => <button className="revision-row" key={revision.id} onClick={() => setRevisionOpen(revision)}><span><strong>{revision.summary || "更新了草稿"}</strong><small>{revision.actor === "web" ? "你在工作台" : "Codex / 外部助手"} · {date(revision.createdAt, true)} · v{revision.toVersion}</small></span><ArrowRight size={14}/></button>) : <p className="scope-notice">草稿修改后，会在这里保留版本和具体变化。</p>}</details>
+        </div>
+        {!!jobs.data?.some((job) => !activeJobs.some((active) => active.id === job.id)) && <details className="quiet-disclosure task-history"><summary>已完成和失败的任务</summary><JobList jobs={jobs.data.filter((job) => !activeJobs.some((active) => active.id === job.id))} onAbandon={setAbandonJob} onReconcile={() => {}}/></details>}
+        <ErrorBox error={jobs.error} retry={() => void jobs.refetch()}/>
       </div>
-      <ErrorBox error={error} />
-      {latestWorkspace.sourceChanged && (
-        <div className="notice remote-notice">
-          <div>
-            <strong>flomo 原笔记有新内容</strong>
-            <span>本地草稿已保留。写回前请比较变化并更新基准。</span>
-          </div>
-          <button
-            className="button secondary small"
-            onClick={() => setRemoteCompare(true)}
-          >
-            比较原文变化
-          </button>
-        </div>
-      )}
-      {editor.conflict && (
-        <div className="conflict-panel" role="alert">
-          <div>
-            <strong>另一端更新了草稿，你的输入已保留</strong>
-            <p>
-              当前服务端为 v{editor.conflict.version}
-              。选择一个版本继续，或先手动合并文本。
-            </p>
-          </div>
-          <div className="comparison">
-            <div>
-              <h4>你的未保存草稿</h4>
-              <pre>{editor.draft}</pre>
-            </div>
-            <div>
-              <h4>服务端最新草稿</h4>
-              <pre>{editor.conflict.draft}</pre>
-            </div>
-          </div>
-          <div className="button-row">
-            <button
-              className="button secondary small"
-              onClick={() => editor.session.resolve("server")}
-            >
-              采用服务端草稿
-            </button>
-            <button
-              className="button primary small"
-              onClick={() => editor.session.resolve("local")}
-            >
-              将我的草稿保存为新版本
-            </button>
-          </div>
-        </div>
-      )}
-      <div className="workspace-body">
-        <section className="editor-column">
-          <div className="editor-heading">
-            <div className="eyebrow">A THOUGHT IN THE MAKING</div>
-            <h1>{workspace.title}</h1>
-            <div className="editor-source-meta">
-              <span className="tag-chip">工作草稿</span>
-              <MemoLink memo={workspace.source}>来源笔记</MemoLink>
-            </div>
-          </div>
-          <div className={`original-note ${sourceOpen ? "expanded" : ""}`}>
-            <button
-              className="original-toggle"
-              onClick={() => setSourceOpen(!sourceOpen)}
-            >
-              <FileText size={15} />
-              <span>加工前的原笔记</span>
-              <span>{date(workspace.source.created_at)}</span>
-              <ChevronDown size={15} />
-            </button>
-            {sourceOpen && (
-              <div className="original-body">
-                <Markdown>{workspace.source.content}</Markdown>
-                {workspace.source.content_truncated && (
-                  <div className="notice">
-                    原笔记内容不完整，请检查接入状态后重新读取。
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-          <div className="editor-toolbar">
-            <div className="segmented">
-              <button
-                className={!preview ? "selected" : ""}
-                onClick={() => setPreview(false)}
-              >
-                编辑
-              </button>
-              <button
-                className={preview ? "selected" : ""}
-                onClick={() => setPreview(true)}
-              >
-                阅读预览
-              </button>
-            </div>
-            <div className={`save-status ${editor.error ? "error" : ""}`}>
-              {editor.saving ? (
-                <>
-                  <Loader2 size={13} className="spin" />
-                  保存中
-                </>
-              ) : editor.conflict ? (
-                <>等待解决冲突</>
-              ) : editor.error ? (
-                <button
-                  className="text-button"
-                  onClick={() => void editor.session.flush().catch(() => {})}
-                >
-                  保存失败 · 重试
-                </button>
-              ) : editor.dirty ? (
-                <>
-                  <Circle size={8} />
-                  尚未保存
-                </>
-              ) : (
-                <>
-                  <CheckCheck size={14} />
-                  已保存
-                </>
-              )}
-            </div>
-          </div>
-          <ErrorBox error={editor.error} />
-          {preview ? (
-            <div className="draft-preview">
-              <Markdown>{editor.draft || "草稿还没有内容。"}</Markdown>
-            </div>
-          ) : (
-            <textarea
-              className="draft-editor"
-              aria-label="工作草稿"
-              value={editor.draft}
-              onChange={(event) => editor.session.edit(event.target.value)}
-              spellCheck={false}
-              placeholder="把还没想清楚的部分写下来。从一个问题、一个例子开始…"
-            />
-          )}
-          <div className="editor-footer">
-            <span>
-              {editor.draft.length.toLocaleString()} 字符 · 支持 Markdown
-            </span>
-            <span>自动保存到工作台，写回后才会修改 flomo</span>
-          </div>
-          <div className="workflow-note">
-            <span>01 读原文</span>
-            <span>02 找联系</span>
-            <span>03 写下自己的理解</span>
-            <span>04 确认后写回</span>
-          </div>
-        </section>
-        <aside className="assistant-column">
-          <div className="assistant-tabs">
-            <button
-              className={panel === "materials" ? "selected" : ""}
-              onClick={() => setPanel("materials")}
-            >
-              <Layers3 size={16} />
-              参考材料<span>{workspace.materials.length}</span>
-            </button>
-            <button
-              className={panel === "chat" ? "selected" : ""}
-              onClick={() => setPanel("chat")}
-            >
-              <MessageCircle size={16} />
-              一起想想<span>{workspace.messages.length}</span>
-            </button>
-          </div>
-          {panel === "materials" ? (
-            <div className="materials-panel">
-              <div className="panel-intro">
-                <h3>给想法一些上下文</h3>
-                <p>选择相关的原文、观点和反例。AI 将依据这些材料与你讨论。</p>
-                <button
-                  className="button secondary add-material"
-                  onClick={() => setMaterialSearch(true)}
-                >
-                  <Plus size={15} />
-                  查找并添加材料
-                </button>
-              </div>
-              {workspace.materials.length ? (
-                <div className="material-list">
-                  {workspace.materials.map((memo, index) => (
-                    <article className="material-card" key={memo.id}>
-                      <div className="material-meta">
-                        <span>
-                          材料 {String(index + 1).padStart(2, "0")} ·{" "}
-                          {date(memo.created_at)}
-                        </span>
-                        <button
-                          className="icon-button"
-                          aria-label={`移除材料 ${index + 1}`}
-                          disabled={!!busy}
-                          onClick={() =>
-                            void action("material", async () => {
-                              const saved = await editor.session.flush();
-                              update(
-                                await api.materials(
-                                  workspace.id,
-                                  saved.materials
-                                    .filter((item) => item.id !== memo.id)
-                                    .map((item) => item.id),
-                                  saved.version,
-                                ),
-                              );
-                            })
-                          }
-                        >
-                          <X size={14} />
-                        </button>
-                      </div>
-                      <details>
-                        <summary>{excerpt(memo.content, 130)}</summary>
-                        <Markdown>{memo.content}</Markdown>
-                      </details>
-                      <div className="memo-tags">
-                        {memo.tags.slice(0, 3).map((tag) => (
-                          <span key={tag}>#{tag}</span>
-                        ))}
-                      </div>
-                      <MemoLink memo={memo} />
-                    </article>
-                  ))}
-                </div>
-              ) : (
-                <div className="materials-empty">
-                  <Layers3 size={28} />
-                  <p>
-                    连接两条笔记，
-                    <br />
-                    可能就多一个新的角度。
-                  </p>
-                </div>
-              )}
-              <div className="agent-tip">
-                <Terminal size={17} />
-                <div>
-                  <strong>让 Codex 参与思考</strong>
-                  <p>
-                    在当前对话中让 Codex
-                    读取这个工作区、查找材料或更新草稿，页面会自动同步。
-                  </p>
-                  <code>{workspace.id}</code>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <ChatPanel
-              workspace={workspace}
-              aiConfigured={aiConfigured}
-              flush={() => editor.session.flush()}
-              onUpdate={update}
-              onApply={(content, mode) => {
-                if (mode === "append") editor.session.append(content);
-                else editor.session.edit(content);
-                setPreview(false);
-              }}
-            />
-          )}
-          <JobList
-            jobs={jobs.data ?? []}
-            onAbandon={setAbandonJob}
-            onReconcile={(id) =>
-              void action("reconcile", async () => {
-                await api.reconcile(id);
-                await jobs.refetch();
-                void client.invalidateQueries({
-                  queryKey: ["workspace", workspace.id],
-                });
-              })
-            }
-          />
-          <ErrorBox error={jobs.error} retry={() => void jobs.refetch()} />
-        </aside>
-      </div>
+      {view === "draft" && <footer className="draft-actionbar"><div><strong>{saveStatus}</strong><span>确认写回后才会更新 flomo</span></div><button className="button primary" disabled={!!busy || !!editor.conflict || !!editor.review || activeJobs.some((job) => job.kind === "publish")} onClick={() => void preparePublish()}>{busy === "preview" ? <Loader2 size={14} className="spin"/> : <ArrowUpRight size={15}/>}预览写回</button></footer>}
+      {reviewOpen && (editor.review || editor.conflict) && <Modal title={editor.conflict ? "选择要继续的草稿" : "查看另一端的草稿更新"} wide onClose={() => setReviewOpen(false)}><p className="modal-description">{editor.conflict ? "删除标记对应你的当前输入，新增标记对应另一端内容。你的输入仍保留在编辑器中，可关闭此窗口手动合并。" : "这里显示从当前草稿到新版本的变化；采用后才会更新编辑区。"}</p><InlineDiff before={editor.draft} after={(editor.conflict ?? editor.review)!.draft}/><div className="modal-actions"><button className="button secondary" onClick={() => setReviewOpen(false)}>暂不处理</button>{editor.conflict ? <><button className="button secondary" onClick={() => { editor.session.resolve("local"); setReviewOpen(false); }}>保留我的输入并保存</button><button className="button primary" onClick={() => { editor.session.resolve("server"); setReviewOpen(false); onView("draft"); }}>采用另一端版本</button></> : <button className="button primary" onClick={() => { editor.session.acceptReview(); setReviewOpen(false); onView("draft"); }}>采用新版本</button>}</div></Modal>}
+      {revisionOpen && <Modal title="草稿改动" wide onClose={() => setRevisionOpen(null)}><p className="modal-description">{revisionOpen.summary || "更新草稿"} · {date(revisionOpen.createdAt, true)} · v{revisionOpen.fromVersion} → v{revisionOpen.toVersion}</p><InlineDiff before={revisionOpen.before} after={revisionOpen.after}/></Modal>}
       {abandonJob && (
         <Modal title="结束不确定写回的跟踪" onClose={() => setAbandonJob(null)}>
           <p className="modal-description">
@@ -1181,7 +708,7 @@ function Workbench({
       )}
       {materialSearch && (
         <MaterialDialog
-          selected={workspace.materials.map((memo) => memo.id)}
+          selected={latestWorkspace.materials.map((memo) => memo.id)}
           sourceId={workspace.memoId}
           onClose={() => setMaterialSearch(false)}
           onAdd={async (ids) => {
@@ -1208,18 +735,7 @@ function Workbench({
           <p className="modal-description">
             比较完成后，可以将远端新内容设为比较基准。本地草稿会保留；需要的内容可手动合并到草稿。
           </p>
-          <div className="comparison document-comparison">
-            <div>
-              <h3>之前的原文</h3>
-              <pre>{workspace.source.content}</pre>
-            </div>
-            <div>
-              <h3>flomo 当前内容</h3>
-              <pre>
-                {latestWorkspace.remote?.content ?? "请重新检查远端内容"}
-              </pre>
-            </div>
-          </div>
+          <InlineDiff before={workspace.source.content} after={latestWorkspace.remote?.content ?? "请重新检查远端内容"} />
           <ErrorBox error={error} />
           <div className="modal-actions">
             <button
@@ -1262,22 +778,13 @@ function Workbench({
             </MemoLink>
             <span>草稿版本 v{publishPreview.version}</span>
           </div>
-          <div className="comparison document-comparison">
-            <div>
-              <h3>flomo 原文</h3>
-              <pre>{publishPreview.source.content}</pre>
-            </div>
-            <div>
-              <h3>即将写回的草稿</h3>
-              <pre>{publishPreview.draft}</pre>
-            </div>
-          </div>
+          <InlineDiff before={publishPreview.source.content} after={publishPreview.draft} />
           {publishPreview.sourceChanged && (
             <div className="notice">
               flomo 原文已改变，请先关闭预览，比较远端变化并更新基准。
             </div>
           )}
-          {workspace.version !== publishPreview.version && (
+          {latestWorkspace.version !== publishPreview.version && (
             <div className="notice">
               工作区已更新，请关闭后重新预览最新版本。
             </div>
@@ -1296,7 +803,7 @@ function Workbench({
               disabled={
                 !!busy ||
                 publishPreview.sourceChanged ||
-                workspace.version !== publishPreview.version ||
+                latestWorkspace.version !== publishPreview.version ||
                 !publishPreview.draft.trim()
               }
               onClick={() => void publish()}
@@ -1315,7 +822,79 @@ function Workbench({
   );
 }
 
+const relationLabels = { support: "支持观点", counterpoint: "不同角度", example: "实际案例", background: "背景资料" };
+
+function GoalEditor({ workspace, onUpdate, onDirty }: { workspace: Workspace; onUpdate: (workspace: Workspace) => void; onDirty: (dirty: boolean) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(workspace.goal ?? "");
+  const [base, setBase] = useState({ goal: workspace.goal ?? "", version: workspace.version });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const dirty = editing && value !== base.goal;
+  const remotelyChanged = editing && (workspace.goal ?? "") !== base.goal;
+  useEffect(() => { onDirty(dirty); }, [dirty]);
+  useEffect(() => {
+    if (!editing) { setValue(workspace.goal ?? ""); setBase({ goal: workspace.goal ?? "", version: workspace.version }); }
+  }, [workspace.goal, workspace.version, editing]);
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => { if (dirty) { event.preventDefault(); event.returnValue = ""; } };
+    addEventListener("beforeunload", warn); return () => removeEventListener("beforeunload", warn);
+  }, [dirty]);
+  async function save() {
+    setBusy(true); setError("");
+    try {
+      // Editing is based on the goal the user actually saw. Other workspace changes
+      // may advance the version, but a new remote goal must be explicitly reviewed.
+      if (remotelyChanged) throw new Error("另一端修改了本次目标，请先核对下面的新目标。");
+      const saved = await api.goal(workspace.id, value.trim(), workspace.version);
+      onUpdate(saved); setEditing(false); onDirty(false);
+    } catch (error) { setError(messageOf(error)); }
+    finally { setBusy(false); }
+  }
+  return <section className={`goal-card ${editing ? "editing" : ""}`}>
+    <div className="goal-label"><span>这次要想清楚</span>{!editing && <button className="text-button" onClick={() => { setValue(workspace.goal ?? ""); setBase({ goal: workspace.goal ?? "", version: workspace.version }); setEditing(true); }}>{workspace.goal ? "修改" : "设定目标"}</button>}</div>
+    {editing ? <><textarea aria-label="本次加工目标" readOnly={busy} autoFocus rows={3} value={value} placeholder="例如：明确这个账号服务谁、解决什么问题，以及先做什么内容。" onChange={(event) => setValue(event.target.value)} maxLength={5000}/>{remotelyChanged && <div className="notice"><strong>另一端的新目标</strong><p>{workspace.goal || "（已清空）"}</p><button className="text-button" onClick={() => { setValue(workspace.goal ?? ""); setBase({ goal: workspace.goal ?? "", version: workspace.version }); setError(""); }}>采用新目标</button><button className="text-button" onClick={() => { setBase({ goal: workspace.goal ?? "", version: workspace.version }); setError(""); }}>已核对，继续用我的输入</button></div>}<ErrorBox error={error}/><div className="inline-actions"><button className="text-button subdued" disabled={busy} onClick={() => { setEditing(false); setError(""); onDirty(false); }}>取消</button><button className="button primary small" disabled={busy || remotelyChanged} onClick={() => void save()}>{busy ? "保存中…" : "保存目标"}</button></div></> : <p className={workspace.goal ? "" : "placeholder-text"}>{workspace.goal || "让 Codex 知道你想完善什么：一个观点、一篇文章，或下一步行动。"}</p>}
+  </section>;
+}
+
+function DecisionCard({ decision, disabled, onAnswer, onDirty }: {
+  decision: Decision; disabled: boolean;
+  onAnswer: (answer: string, expectedAnswer: string | null) => Promise<void>;
+  onDirty: (dirty: boolean) => void;
+}) {
+  const [answer, setAnswer] = useState("");
+  const [baseAnswer, setBaseAnswer] = useState(decision.answer);
+  const [custom, setCustom] = useState(!decision.options.length);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const dirty = !!answer.length;
+  const remotelyChanged = dirty && decision.answer !== baseAnswer;
+  useEffect(() => { onDirty(dirty || busy); }, [dirty, busy]);
+  useEffect(() => { if (!dirty && !busy) setBaseAnswer(decision.answer); }, [decision.answer, dirty, busy]);
+  async function submit(value: string) {
+    if (!value.trim() || busy || remotelyChanged) return;
+    setBusy(true); setError("");
+    try { await onAnswer(value.trim(), baseAnswer); setAnswer(""); }
+    catch (error) { setError(messageOf(error)); }
+    finally { setBusy(false); }
+  }
+  if (decision.answer && !dirty && !busy) return null;
+  return <article className="decision-card">
+    <h3>{decision.question}</h3>
+    {remotelyChanged && <div className="notice"><strong>另一端已回答，你的输入已保留</strong><p>{decision.answer}</p>
+      <div className="inline-actions"><button className="text-button" onClick={() => { setAnswer(""); setBaseAnswer(decision.answer); setError(""); }}>采用这个回答</button><button className="text-button" onClick={() => { setBaseAnswer(decision.answer); setError(""); }}>已核对，继续用我的输入</button></div>
+    </div>}
+    <div className="decision-options">{decision.options.map((option) => <button key={option} className="decision-option" disabled={disabled || busy || remotelyChanged} onClick={() => void submit(option)}>{option}<ArrowRight size={14}/></button>)}</div>
+    {!custom ? <button className="text-button subdued" onClick={() => setCustom(true)}>补充自己的回答</button> : <div className="decision-answer">
+      <textarea aria-label={`回答：${decision.question}`} rows={2} value={answer} readOnly={busy} maxLength={5000} onChange={(event) => setAnswer(event.target.value)} placeholder="写下你的判断或约束…"/>
+      <button className="button secondary small" disabled={disabled || busy || remotelyChanged || !answer.trim()} onClick={() => void submit(answer)}>{busy ? "保存中…" : "保存判断"}</button>
+    </div>}
+    <ErrorBox error={error}/>
+  </article>;
+}
+
 function ChatPanel({
+  onDirty,
   workspace,
   aiConfigured,
   flush,
@@ -1327,12 +906,14 @@ function ChatPanel({
   flush: () => Promise<Workspace>;
   onUpdate: (workspace: Workspace) => void;
   onApply: (content: string, mode: "append" | "replace") => void;
+  onDirty: (dirty: boolean) => void;
 }) {
   const client = useQueryClient();
   const [prompt, setPrompt] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [applyMessage, setApplyMessage] = useState<string | null>(null);
+  useEffect(() => { onDirty(!!prompt.length || busy); }, [prompt, busy]);
   const attempt = useRef<{
     prompt: string;
     version: number;
@@ -1395,6 +976,7 @@ function ChatPanel({
               你最想继续探究什么？
             </p>
             <button
+              disabled={busy}
               onClick={() =>
                 setPrompt(
                   "结合原笔记和参考材料，帮我找出最值得继续思考的三个问题，并标注对应笔记的来源。",
@@ -1458,6 +1040,7 @@ function ChatPanel({
       >
         <textarea
           aria-label="讨论问题"
+          readOnly={busy}
           placeholder="提出问题，或记录自己的判断…"
           value={prompt}
           onChange={(event) => {

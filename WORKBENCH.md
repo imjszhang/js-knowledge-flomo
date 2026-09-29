@@ -24,20 +24,33 @@ npm start
 
 ## 在 Codex 中加工一条待编
 
-先读取材料和版本，再更新。以下 ID 和版本号均应替换成命令真实返回值：
+Web 按 Codex 右侧面板设计：优先恢复当前工作，五个置顶标签和笔记搜索放在切换入口中；「笔记、材料、草稿」一次显示一个视图。先在页面选择笔记、写明这次要完成的目标，再在 Codex 里提出加工要求。CLI 可以直接读取这份共享上下文：
 
 ```bash
-npm run --silent workbench -- memo list --tag 待编 --json
-npm run --silent workbench -- workspace create --memo MEMO_ID --json
-npm run --silent workbench -- workspace get WORKSPACE_ID --json
-npm run --silent workbench -- material set WORKSPACE_ID --memo MATERIAL_ID_1,MATERIAL_ID_2 --base-version 1 --json
-npm run --silent workbench -- draft update WORKSPACE_ID --file draft.md --base-version 2 --json
+npm run --silent workbench -- context get --json
+npm run --silent workbench -- workspace get current --json
+```
+
+`context get` 返回 `workspaceId`、当前 `view`、选择状态的 `revision` 和完整 `workspace`。工作区内包含来源、加工目标 `goal`、草稿、候选材料 `materialCandidates`、已选材料 `materials`、待判断问题 `decisions`、讨论和内容 `version`。问题中的 `answer` 为 `null` 表示尚未回答。没有当前工作时 `workspaceId` 和 `workspace` 为 `null`，使用 `current` 返回 `NO_ACTIVE_WORKSPACE`。
+
+所有以工作区 ID 为参数的命令都可以使用 `current`，包括 `job list --workspace current`。读取无需附加参数；**修改 `current` 必须附上刚读到的 `--context-revision`**。如果用户已切换工作或视图，就返回 `CONTEXT_CONFLICT`，避免两份笔记恰好具有相同内容版本时误写。校验后只解析一次真实 ID，后续请求固定操作该笔记。
+
+Agent 进行较长时间分析时，应保存读取结果中的真实 `workspace.id`，并用这个 ID 写回，无需附加选择版本，也无需人工复制 ID。不要在遇到上下文冲突时盲目采用新 revision；先核实本次结果属于哪条笔记。
+
+以下 ID 和版本号均应替换成命令真实返回值。**每次成功修改都重新采用返回版本**；版本冲突时重新读取并比较，不能只换版本号覆盖。
+
+```bash
+# 在已有笔记上明确本次加工目标
+npm run --silent workbench -- workspace goal current --text "明确账号服务谁、解决什么问题，以及第一篇内容" --base-version CURRENT_VERSION --context-revision CONTEXT_REVISION --json
+# 保存结果，并告诉页面这次主要改了什么
+npm run --silent workbench -- draft update WORKSPACE_ID --file draft.md --summary "补充目标读者和两个科研案例" --base-version CURRENT_VERSION --json
+npm run --silent workbench -- draft history WORKSPACE_ID --json
 npm run --silent workbench -- draft diff WORKSPACE_ID --json
 ```
 
-`workspace get` 返回完整来源、草稿、已选择材料、对话和当前 `version`。**每次成功修改都重新采用返回版本**。不要假定上面示意的版本号适用于实际会话，其他窗口也可能同时修改工作区。
-
 正文支持 `--file PATH`、`--stdin` 或 `--text TEXT`，三选一。文件或标准输入适合 Markdown、多行和包含特殊字符的正文。草稿更新替换全文，空正文也会保存，发布前请检查差异。
+
+`draft history` 返回最近 50 次草稿修改，包含修改前后正文、摘要、操作者和版本。页面可以查看 Agent 新改了什么；用户尚未保存的输入会保留，外部修改由用户查看、比较后再采用。
 
 Codex 可以在当前对话中分析材料，再将结果写回工作台，不需要额外配置 AI API。若希望留存讨论过程：
 
@@ -45,7 +58,55 @@ Codex 可以在当前对话中分析材料，再将结果写回工作台，不�
 npm run --silent workbench -- message add WORKSPACE_ID --role assistant --file analysis.md --base-version CURRENT_VERSION --json
 ```
 
-材料列表采用整体替换；清空材料需要显式传入 `--memo ""`。来源的 ID、日期、链接应保留在草稿或讨论中，便于核实。工作区材料提供明确引用上下文。Web 收到变更通知后自动刷新；如果页面存在尚未保存的输入，会保留输入并提示外部更新，避免覆盖用户正在编辑的内容。
+### 给出有理由的材料推荐，让用户判断
+
+先检索并阅读笔记全文，再把推荐理由写入工作台。`material propose` 的文件内容是 JSON 数组：
+
+```json
+[
+  {"memoId":"MATERIAL_ID_1","reason":"提供无编程背景研究者的实际案例","relation":"example"},
+  {"memoId":"MATERIAL_ID_2","reason":"质疑把自动生成结果等同于完成科研的假设","relation":"counterpoint"}
+]
+```
+
+```bash
+npm run --silent workbench -- material propose WORKSPACE_ID --file materials.json --base-version CURRENT_VERSION --json
+```
+
+`relation` 支持 `support`（支持观点）、`counterpoint`（不同角度）、`example`（案例）、`background`（背景）。用户在材料页阅读原文，选择「用于本次加工」或「暂时不用」，状态分别为 `selected`、`dismissed`；新推荐为 `proposed`。Codex 下一次读取工作区就能看到这些选择。CLI 也可以操作：
+
+```bash
+npm run --silent workbench -- material decide WORKSPACE_ID --memo MATERIAL_ID_1 --status selected --base-version CURRENT_VERSION --json
+```
+
+问题应具体到当前笔记，保存成 `decision.json`：
+
+```json
+{"question":"这个账号主要帮助谁？","options":["没有编程经验的研究生","刚接触 AI 的独立研究者"]}
+```
+
+```bash
+npm run --silent workbench -- decision add WORKSPACE_ID --file decision.json --base-version CURRENT_VERSION --json
+# 用户可在页面选项中作答或补充自己的答案；CLI 也能保存答案
+npm run --silent workbench -- decision answer WORKSPACE_ID --decision DECISION_ID --text "没有编程经验的研究生" --base-version CURRENT_VERSION --json
+```
+
+问题最多有 6 个选项，`options` 可省略。推荐和问题文件不要包含版本字段；版本通过 `--base-version` 单独指定。
+
+这些选择、目标和回答保存于同一服务，**不会主动向 Codex 对话发送消息或自动唤醒 Agent**。用户可以在 Codex 中说“我选好了，继续”，Agent 重新读取工作区后接着处理；连续执行中的 Agent 也可读取变更通知后刷新上下文。网页中的 AI 讨论保留为独立使用时的可选功能。
+
+仍可使用 `material set WORKSPACE_ID --memo ID1,ID2 --base-version N` 整体替换已选材料；清空材料需要显式传入 `--memo ""`。来源的 ID、日期、链接应保留在草稿或讨论中，便于核实。
+
+### 从 CLI 打开或切换工作
+
+```bash
+npm run --silent workbench -- memo list --tag 待编 --json
+npm run --silent workbench -- workspace create --memo MEMO_ID --json
+npm run --silent workbench -- context get --json
+npm run --silent workbench -- context set --workspace WORKSPACE_ID --view materials --base-revision CONTEXT_REVISION --json
+```
+
+`view` 可选 `note`、`materials`、`draft`。`--workspace none` 清空当前选择。`--base-revision` 对应选择状态的 `revision`，最初可以为 0，**与草稿等内容的 `--base-version` 是不同计数器**。选择被其他入口改变时返回冲突，重新读取上下文再决定是否切换。Web 通过共享上下文恢复当前工作；同一服务的多个页面也共享这份选择。
 
 ## 发布与冲突
 
@@ -156,7 +217,19 @@ npm run --silent workbench -- job get JOB_ID --json
 }
 ```
 
-工具均以 `workbench_` 开头，覆盖笔记/标签查询、工作区、草稿、材料、对话、任务、设置和变更读取。`workbench_changes_wait` 最多等待 30 秒，适合短期等待；持续监听使用 CLI。所有 MCP 修改标记为 `mcp`，与 Web 和 CLI 共享版本检查。该适配器仅提供 stdio，不另建远程 HTTP MCP 服务。
+工具均以 `workbench_` 开头，覆盖笔记/标签查询、工作区、草稿、材料、对话、任务、设置和变更读取。侧栏协作对应以下工具：
+
+| 操作 | MCP 工具 |
+| --- | --- |
+| 读取、切换当前工作 | `workbench_context_get` / `workbench_context_set` |
+| 更新加工目标 | `workbench_workspace_goal` |
+| 推荐材料、保存选择 | `workbench_materials_propose` / `workbench_material_decide` |
+| 提出问题、保存回答 | `workbench_decision_add` / `workbench_decision_answer` |
+| 查看草稿改动记录 | `workbench_draft_history` |
+
+工作区工具的 `id` 接受 `current`；修改时还必须传入读取上下文时得到的 `contextRevision`，或直接使用真实工作区 ID。更新草稿的 `summary` 可解释本次改动。`workbench_context_set` 接受 `workspaceId`（可以为 `null`）、`view` 和 `baseRevision`。
+
+`workbench_changes_wait` 最多等待 30 秒，适合短期等待；持续监听使用 CLI。所有 MCP 修改标记为 `mcp`，与 Web 和 CLI 共享版本检查。该适配器仅提供 stdio，不另建远程 HTTP MCP 服务。
 
 ## 退出码和诊断
 

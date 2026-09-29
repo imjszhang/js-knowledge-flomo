@@ -3,7 +3,8 @@ import fastifyStatic from '@fastify/static';
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { z, ZodError } from 'zod';
-import { createWorkspaceSchema, updateDraftSchema, materialsSchema, messageSchema, aiSchema, publishSchema, settingsSchema, versionSchema } from '../shared/contracts.js';
+import { createWorkspaceSchema, updateDraftSchema, materialsSchema, messageSchema, aiSchema, publishSchema, settingsSchema, versionSchema,
+  contextSchema, goalSchema, candidatesSchema, candidateChoiceSchema, decisionSchema, decisionAnswerSchema } from '../shared/contracts.js';
 import type { Actor, Change } from '../shared/contracts.js';
 import { AppError } from './errors.js';
 import { ProviderError } from './provider-types.js';
@@ -56,6 +57,8 @@ export async function createApp({ service, webRoot, flomoConfigured, periodicRef
   app.get(`${root}/health`, async () => ({ok:true, aiConfigured:Boolean(service.ai), flomoConfigured:flomoConfigured ? await flomoConfigured() : true}));
   app.get(`${root}/settings`, () => store.getSettings());
   app.put(`${root}/settings`, request => store.setSettings(settingsSchema.parse(request.body), actor(request)));
+  app.get(`${root}/context`, () => store.getContext());
+  app.put(`${root}/context`, request => store.setContext(contextSchema.parse(request.body),actor(request)));
   app.get(`${root}/memos`, request => {
     const query = z.object({q:z.string().max(1000).optional(), tag:z.string().max(200).optional(),
       startDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), limit:z.coerce.number().int().min(1).max(50).default(30)}).parse(request.query);
@@ -71,9 +74,32 @@ export async function createApp({ service, webRoot, flomoConfigured, periodicRef
     return service.createWorkspace(body.memoId, body.title, actor(request));
   });
   app.get(`${root}/workspaces/:id`, request => store.getWorkspace(idOf(request)));
+  app.get(`${root}/workspaces/:id/revisions`, request => store.listDraftRevisions(idOf(request)));
+  app.patch(`${root}/workspaces/:id/goal`, request => {
+    const body = goalSchema.parse(request.body);
+    return store.updateWorkspace(idOf(request),body.baseVersion,actor(request),'goal',workspace => ({...workspace,goal:body.goal}));
+  });
+  app.post(`${root}/workspaces/:id/candidates`, request => {
+    const body = candidatesSchema.parse(request.body);
+    return service.proposeCandidates(idOf(request),body.items,body.baseVersion,actor(request));
+  });
+  app.patch(`${root}/workspaces/:id/candidates/:memoId`, request => {
+    const {id,memoId} = z.object({id:z.string().min(1),memoId:z.string().min(1)}).parse(request.params);
+    const body = candidateChoiceSchema.parse(request.body);
+    return service.chooseCandidate(id,memoId,body.status,body.baseVersion,actor(request));
+  });
+  app.post(`${root}/workspaces/:id/decisions`, request => {
+    const body = decisionSchema.parse(request.body);
+    return service.createDecision(idOf(request),body.question,body.options,body.baseVersion,actor(request));
+  });
+  app.patch(`${root}/workspaces/:id/decisions/:decisionId`, request => {
+    const {id,decisionId} = z.object({id:z.string().min(1),decisionId:z.string().min(1)}).parse(request.params);
+    const body = decisionAnswerSchema.parse(request.body);
+    return service.answerDecision(id,decisionId,body.answer,body.baseVersion,actor(request));
+  });
   app.patch(`${root}/workspaces/:id/draft`, request => {
     const body = updateDraftSchema.parse(request.body);
-    return store.updateWorkspace(idOf(request), body.baseVersion, actor(request), 'draft', workspace => ({...workspace,draft:body.draft}));
+    return store.updateWorkspace(idOf(request), body.baseVersion, actor(request), 'draft', workspace => ({...workspace,draft:body.draft}),body.summary);
   });
   app.put(`${root}/workspaces/:id/materials`, request => {
     const body = materialsSchema.parse(request.body);

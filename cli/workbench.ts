@@ -3,7 +3,7 @@ import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import type { Actor, Change, Workspace } from '../shared/contracts.js';
+import { candidateChoiceSchema, candidatesSchema, contextSchema, decisionSchema, type ActiveContext, type Actor, type Change, type Workspace } from '../shared/contracts.js';
 
 export class WorkbenchError extends Error {
   constructor(public readonly code: string, message: string, public readonly exitCode = 1, public readonly details?: unknown) {
@@ -56,8 +56,23 @@ export class WorkbenchClient {
     return data as T;
   }
 
+  async resolveWorkspaceId(id: string, contextRevision?: number): Promise<string> {
+    if (id !== 'current') return id;
+    const context = await this.request<ActiveContext>('GET', '/context');
+    if (contextRevision !== undefined && context.revision !== contextRevision) throw new WorkbenchError('CONTEXT_CONFLICT', 'The active workspace or view changed. Read context again and confirm the intended workspace before updating.', 3, { expectedRevision: contextRevision, actualRevision: context.revision });
+    if (!context.workspaceId) throw new WorkbenchError('NO_ACTIVE_WORKSPACE', 'Select a note in the Web workbench, or set an active workspace with context set.', 2);
+    return context.workspaceId;
+  }
+
+  /** Resolve current once, so a concurrent Web selection cannot redirect an operation. */
+  async workspaceRequest<T = unknown>(method: string, id: string, suffix = '', body?: unknown, contextRevision?: number): Promise<T> {
+    if (method !== 'GET' && id === 'current' && contextRevision === undefined) throw new WorkbenchError('CONTEXT_REVISION_REQUIRED', 'Updating current requires --context-revision (MCP: contextRevision) from context get. For a longer task, use the explicit workspace.id returned by that read.', 2);
+    const resolvedId = await this.resolveWorkspaceId(id, contextRevision);
+    return this.request<T>(method, `/workspaces/${encodeURIComponent(resolvedId)}${suffix}`, body);
+  }
+
   async diff(id: string) {
-    const workspace = await this.request<Workspace>('GET', `/workspaces/${encodeURIComponent(id)}`);
+    const workspace = await this.workspaceRequest<Workspace>('GET', id);
     return {
       workspaceId: workspace.id,
       version: workspace.version,
@@ -154,10 +169,17 @@ const usage = `flomo workbench CLI (requires the local service)
   workspace create --memo ID [--title TEXT]
   workspace get ID | workspace refresh ID
   workspace rebase ID --base-version N
-  draft update ID (--file PATH | --stdin | --text TEXT) --base-version N
-  draft diff ID
+  workspace goal ID (--file PATH | --stdin | --text TEXT) --base-version N
+  context get
+  context set --workspace ID|none --view note|materials|draft --base-revision N
+  draft update ID (--file PATH | --stdin | --text TEXT) --base-version N [--summary TEXT]
+  draft diff ID | draft history ID
   draft publish ID --expected-version N --idempotency-key KEY
   material set ID --memo ID1,ID2 --base-version N
+  material propose ID --file PATH --base-version N
+  material decide ID --memo ID --status selected|dismissed|proposed --base-version N
+  decision add ID --file PATH --base-version N
+  decision answer ID --decision ID (--file PATH | --stdin | --text TEXT) --base-version N
   message add ID --role user|assistant (--file PATH | --stdin | --text TEXT) --base-version N
   ai run ID --prompt TEXT --base-version N --idempotency-key KEY
   job list [--workspace ID] | job get ID | job reconcile ID
@@ -167,6 +189,10 @@ const usage = `flomo workbench CLI (requires the local service)
   service status
 
 All commands support --json. Output is JSON; changes watch emits NDJSON.
+Use current instead of a workspace ID to target the note selected in the Web.
+Updating current requires --context-revision N from context get; explicit IDs do not.
+context revision controls the shared selection; base-version controls workspace content.
+material propose reads a JSON array of {memoId, reason, relation}; decision add reads {question, options}.
 FLOMO_WORKBENCH_URL defaults to http://127.0.0.1:3000.
 Exit codes: 0 success; 1 service error; 2 invalid input; 3 version conflict; 4 service unavailable.
 Reuse an idempotency key only when retrying the exact same AI/publish operation.
@@ -179,6 +205,8 @@ const optionTypes: Record<string, { type: 'string' | 'boolean' }> = {
   'expected-version': { type: 'string' }, 'idempotency-key': { type: 'string' }, file: { type: 'string' },
   stdin: { type: 'boolean' }, text: { type: 'string' }, role: { type: 'string' }, prompt: { type: 'string' },
   acknowledge: { type: 'boolean' }, workspace: { type: 'string' }, after: { type: 'string' }, prefix: { type: 'string' },
+  view: { type: 'string' }, 'base-revision': { type: 'string' }, summary: { type: 'string' },
+  status: { type: 'string' }, decision: { type: 'string' }, 'context-revision': { type: 'string' },
 };
 
 const commandOptions: Record<string, { flags: string[]; id?: boolean }> = {
@@ -187,9 +215,16 @@ const commandOptions: Record<string, { flags: string[]; id?: boolean }> = {
   'workspace list': { flags: [] }, 'workspace create': { flags: ['memo', 'title'] },
   'workspace get': { flags: [], id: true }, 'workspace refresh': { flags: [], id: true },
   'workspace rebase': { flags: ['base-version'], id: true },
-  'draft update': { flags: ['file', 'stdin', 'text', 'base-version'], id: true }, 'draft diff': { flags: [], id: true },
+  'workspace goal': { flags: ['file', 'stdin', 'text', 'base-version'], id: true },
+  'context get': { flags: [] }, 'context set': { flags: ['workspace', 'view', 'base-revision'] },
+  'draft update': { flags: ['file', 'stdin', 'text', 'base-version', 'summary'], id: true }, 'draft diff': { flags: [], id: true },
+  'draft history': { flags: [], id: true },
   'draft publish': { flags: ['expected-version', 'idempotency-key'], id: true },
   'material set': { flags: ['memo', 'base-version'], id: true },
+  'material propose': { flags: ['file', 'base-version'], id: true },
+  'material decide': { flags: ['memo', 'status', 'base-version'], id: true },
+  'decision add': { flags: ['file', 'base-version'], id: true },
+  'decision answer': { flags: ['decision', 'file', 'stdin', 'text', 'base-version'], id: true },
   'message add': { flags: ['role', 'file', 'stdin', 'text', 'base-version'], id: true },
   'ai run': { flags: ['prompt', 'base-version', 'idempotency-key'], id: true },
   'job list': { flags: ['workspace'] }, 'job get': { flags: [], id: true }, 'job reconcile': { flags: [], id: true },
@@ -197,6 +232,9 @@ const commandOptions: Record<string, { flags: string[]; id?: boolean }> = {
   'changes list': { flags: ['after'] }, 'changes watch': { flags: ['after'] },
   'settings get': { flags: [] }, 'settings set': { flags: ['file'] }, 'service status': { flags: [] },
 };
+for (const command of ['workspace refresh', 'workspace rebase', 'workspace goal', 'draft update', 'draft publish', 'material set', 'material propose', 'material decide', 'decision add', 'decision answer', 'message add', 'ai run']) {
+  commandOptions[command]!.flags.push('context-revision');
+}
 
 export interface CliIO {
   stdout: (text: string) => void;
@@ -246,7 +284,12 @@ export async function runCli(args: string[], io: CliIO = defaultIO, suppliedClie
       return string('text')!;
     };
     const client = suppliedClient ?? new WorkbenchClient();
-    const workspacePath = `/workspaces/${encodeURIComponent(id ?? '')}`;
+    const workspaceRequest = (method: string, suffix = '', body?: unknown) => client.workspaceRequest(method, id!, suffix, body, values['context-revision'] === undefined ? undefined : integer('context-revision', undefined, 0));
+    const jsonFile = async (): Promise<unknown> => {
+      const path = string('file', true)!;
+      try { return JSON.parse(await readFile(path, 'utf8')); }
+      catch { throw new WorkbenchError('INVALID_JSON_FILE', '--file must point to a readable JSON file.', 2); }
+    };
     let result: unknown;
     switch (command) {
       case 'memo list': result = await client.request('GET', '/memos', undefined, { q: string('query'), tag: string('tag'), startDate: string('start-date'), endDate: string('end-date'), limit: values.limit === undefined ? undefined : integer('limit') }); break;
@@ -255,26 +298,67 @@ export async function runCli(args: string[], io: CliIO = defaultIO, suppliedClie
       case 'tags list': result = await client.request('GET', '/tags', undefined, { prefix: string('prefix') }); break;
       case 'workspace list': result = await client.request('GET', '/workspaces'); break;
       case 'workspace create': result = await client.request('POST', '/workspaces', { memoId: string('memo', true), title: string('title') }); break;
-      case 'workspace get': result = await client.request('GET', workspacePath); break;
-      case 'workspace refresh': result = await client.request('POST', `${workspacePath}/refresh`, {}); break;
-      case 'workspace rebase': result = await client.request('POST', `${workspacePath}/rebase`, { baseVersion: integer('base-version') }); break;
-      case 'draft update': result = await client.request('PATCH', `${workspacePath}/draft`, { draft: await content(), baseVersion: integer('base-version') }); break;
+      case 'workspace get': result = await workspaceRequest('GET'); break;
+      case 'workspace refresh': result = await workspaceRequest('POST', '/refresh', {}); break;
+      case 'workspace rebase': result = await workspaceRequest('POST', '/rebase', { baseVersion: integer('base-version') }); break;
+      case 'workspace goal': result = await workspaceRequest('PATCH', '/goal', { goal: await content(), baseVersion: integer('base-version') }); break;
+      case 'context get': result = await client.request('GET', '/context'); break;
+      case 'context set': {
+        const workspaceId = string('workspace', true)!;
+        const parsed = contextSchema.safeParse({ workspaceId: workspaceId === 'none' ? null : workspaceId, view: string('view', true), baseRevision: integer('base-revision', undefined, 0) });
+        if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', '--view must be note, materials or draft.', 2);
+        if (parsed.data.workspaceId === 'current') parsed.data.workspaceId = await client.resolveWorkspaceId('current', parsed.data.baseRevision);
+        result = await client.request('PUT', '/context', parsed.data);
+        break;
+      }
+      case 'draft update': result = await workspaceRequest('PATCH', '/draft', { draft: await content(), baseVersion: integer('base-version'), summary: string('summary') }); break;
       case 'draft diff': result = await client.diff(id!); break;
-      case 'draft publish': result = await client.request('POST', `${workspacePath}/publish`, { baseVersion: integer('expected-version'), idempotencyKey: string('idempotency-key', true) }); break;
+      case 'draft history': result = await workspaceRequest('GET', '/revisions'); break;
+      case 'draft publish': result = await workspaceRequest('POST', '/publish', { baseVersion: integer('expected-version'), idempotencyKey: string('idempotency-key', true) }); break;
       case 'material set': {
         const memoIds = string('memo');
         if (memoIds === undefined) throw new WorkbenchError('INVALID_ARGUMENT', '--memo is required; pass an empty string to remove all materials.', 2);
-        result = await client.request('PUT', `${workspacePath}/materials`, { memoIds: memoIds.split(',').map(value => value.trim()).filter(Boolean), baseVersion: integer('base-version') });
+        result = await workspaceRequest('PUT', '/materials', { memoIds: memoIds.split(',').map(value => value.trim()).filter(Boolean), baseVersion: integer('base-version') });
+        break;
+      }
+      case 'material propose': {
+        const parsed = candidatesSchema.safeParse({ items: await jsonFile(), baseVersion: integer('base-version') });
+        if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', 'Proposal file must contain an array of {memoId, reason, relation}; relation is support, counterpoint, example or background.', 2);
+        result = await workspaceRequest('POST', '/candidates', parsed.data);
+        break;
+      }
+      case 'material decide': {
+        const memoId = string('memo', true)!;
+        const parsed = candidateChoiceSchema.safeParse({ status: string('status', true), baseVersion: integer('base-version') });
+        if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', '--status must be selected, dismissed or proposed.', 2);
+        result = await workspaceRequest('PATCH', `/candidates/${encodeURIComponent(memoId)}`, parsed.data);
+        break;
+      }
+      case 'decision add': {
+        const file = await jsonFile();
+        if (!file || typeof file !== 'object' || Array.isArray(file) || 'baseVersion' in file) throw new WorkbenchError('INVALID_ARGUMENT', 'Decision file must contain {question, options}; supply the version separately with --base-version.', 2);
+        const parsed = decisionSchema.safeParse({ ...file, baseVersion: integer('base-version') });
+        if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', 'Decision file must contain a question and up to six optional string options.', 2);
+        result = await workspaceRequest('POST', '/decisions', parsed.data);
+        break;
+      }
+      case 'decision answer': {
+        const decisionId = string('decision', true)!;
+        result = await workspaceRequest('PATCH', `/decisions/${encodeURIComponent(decisionId)}`, { answer: await content(), baseVersion: integer('base-version') });
         break;
       }
       case 'message add': {
         const role = string('role', true);
         if (role !== 'user' && role !== 'assistant') throw new WorkbenchError('INVALID_ARGUMENT', '--role must be user or assistant.', 2);
-        result = await client.request('POST', `${workspacePath}/messages`, { role, content: await content(), baseVersion: integer('base-version') });
+        result = await workspaceRequest('POST', '/messages', { role, content: await content(), baseVersion: integer('base-version') });
         break;
       }
-      case 'ai run': result = await client.request('POST', `${workspacePath}/ai`, { prompt: string('prompt', true), baseVersion: integer('base-version'), idempotencyKey: string('idempotency-key', true) }); break;
-      case 'job list': result = await client.request('GET', '/jobs', undefined, { workspaceId: string('workspace') }); break;
+      case 'ai run': result = await workspaceRequest('POST', '/ai', { prompt: string('prompt', true), baseVersion: integer('base-version'), idempotencyKey: string('idempotency-key', true) }); break;
+      case 'job list': {
+        const workspaceId = string('workspace');
+        result = await client.request('GET', '/jobs', undefined, { workspaceId: workspaceId === undefined ? undefined : await client.resolveWorkspaceId(workspaceId) });
+        break;
+      }
       case 'job get': result = await client.request('GET', `/jobs/${encodeURIComponent(id!)}`); break;
       case 'job reconcile': result = await client.request('POST', `/jobs/${encodeURIComponent(id!)}/reconcile`, {}); break;
       case 'job abandon': {

@@ -4,7 +4,7 @@
 
 现在支持 **TypeScript 知识工作台**：React Web、CLI 和 MCP 共用一个 Node.js 服务。你可以在网页中编辑待编笔记，也可以让 Codex 通过 CLI 查材料、更新草稿；页面自动收到更新，发生并发编辑时保留本地输入并提示比较。
 
-工作台支持五个置顶入口、完整原文与材料、自动保存草稿、多轮讨论、流式 AI、远端刷新、版本冲突处理和可核对的写回任务。使用方法、Agent 命令和同步边界详见 **[工作台指南](WORKBENCH.md)**。
+工作台为 Codex 侧栏提供单栏的「笔记、材料、草稿」视图：恢复当前工作、明确加工目标、查看带理由的材料推荐、回答具体问题，并核对 Agent 的草稿改动。五个置顶标签和搜索放在笔记切换入口中。CLI / MCP 可以通过 `current` 读取页面当前工作和用户选择。保留自动保存、可选 AI 讨论、远端刷新、版本冲突处理和可核对的写回任务。使用方法、Agent 命令和同步边界详见 **[工作台指南](WORKBENCH.md)**。
 
 [![Node.js](https://img.shields.io/badge/Node.js-22.12+-green.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -30,7 +30,7 @@
 | 观点演变 | 按主题追踪想法随时间的演变 |
 | 关联发现 | 跨标签、跨时间发现笔记间的联系 |
 | 写作辅助 | 根据主题生成大纲、搜集相关素材 |
-| Web UI | 本地页面：搜索、标签树、洞察生成、统计 |
+| Web 工作台 | Codex 侧栏：当前目标、材料推荐与选择、待判断问题、草稿编辑和改动核对 |
 
 ---
 
@@ -104,6 +104,9 @@ npm start
 npm run --silent workbench -- memo list --tag 待编 --json
 # 查看共享加工会话
 npm run --silent workbench -- workspace list --json
+# 读取页面当前笔记、目标、材料选择和待判断问题
+npm run --silent workbench -- context get --json
+npm run --silent workbench -- workspace get current --json
 # 订阅网页、CLI、MCP 的更新
 npm run --silent workbench -- changes watch --after 0 --json
 ```

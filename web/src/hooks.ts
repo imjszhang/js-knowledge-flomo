@@ -28,8 +28,11 @@ export function useChanges() {
           queryKey: ["workspace", change.entityId],
         });
         void client.invalidateQueries({ queryKey: ["workspaces"] });
+        void client.invalidateQueries({ queryKey: ["revisions", change.entityId] });
       } else if (change.entity === "job") {
         void client.invalidateQueries({ queryKey: ["jobs"] });
+      } else if (change.entity === "context") {
+        void client.invalidateQueries({ queryKey: ["context"] });
       } else if (change.entity === "settings") {
         void client.invalidateQueries({ queryKey: ["settings"] });
       }
@@ -51,6 +54,8 @@ export function useChanges() {
       void client.invalidateQueries({ queryKey: ["workspaces"] });
       void client.invalidateQueries({ queryKey: ["jobs"] });
       void client.invalidateQueries({ queryKey: ["settings"] });
+      void client.invalidateQueries({ queryKey: ["context"] });
+      void client.invalidateQueries({ queryKey: ["revisions"] });
       void api
         .changes(cursor.current)
         .then((changes) => changes.forEach(invalidate))
@@ -67,12 +72,14 @@ export function useDraft(workspace: Workspace) {
     () =>
       new DraftSession(workspace, {
         save: api.draft,
+        holdExternalUpdates: true,
         read: api.workspace,
         onSaved: (saved) => {
           client.setQueryData<Workspace>(["workspace", saved.id], (previous) =>
             !previous || previous.version <= saved.version ? saved : previous,
           );
           void client.invalidateQueries({ queryKey: ["workspaces"] });
+          void client.invalidateQueries({ queryKey: ["revisions", saved.id] });
         },
       }),
   );

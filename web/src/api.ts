@@ -1,4 +1,8 @@
 import type {
+  ActiveContext,
+  DraftRevision,
+  MaterialCandidate,
+  WorkbenchView,
   Change,
   Job,
   Memo,
@@ -31,6 +35,8 @@ export async function request<T>(
       "X-Workbench-Actor": "web",
       ...options.headers,
     },
+  }).catch(() => {
+    throw new ApiError("CONNECTION_UNAVAILABLE", "暂时无法连接工作台，页面中的输入已保留。请恢复连接后重试。", 0);
   });
   const body = await response.json().catch(() => null);
   if (!response.ok)
@@ -63,6 +69,16 @@ export const api = {
   related: (id: string) =>
     request<Memo[]>(`/memos/${encodeURIComponent(id)}/related`),
   tags: () => request<TagResult>("/tags"),
+  context: () => request<ActiveContext>("/context"),
+  setContext: (workspaceId: string | null, view: WorkbenchView, baseRevision: number) =>
+    mutation<ActiveContext>("/context", { workspaceId, view, baseRevision }, "PUT"),
+  goal: (id: string, goal: string, baseVersion: number) =>
+    mutation<Workspace>(`/workspaces/${id}/goal`, { goal, baseVersion }, "PATCH"),
+  chooseCandidate: (id: string, memoId: string, status: MaterialCandidate["status"], baseVersion: number) =>
+    mutation<Workspace>(`/workspaces/${id}/candidates/${encodeURIComponent(memoId)}`, { status, baseVersion }, "PATCH"),
+  answerDecision: (id: string, decisionId: string, answer: string, baseVersion: number) =>
+    mutation<Workspace>(`/workspaces/${id}/decisions/${decisionId}`, { answer, baseVersion }, "PATCH"),
+  revisions: (id: string) => request<DraftRevision[]>(`/workspaces/${id}/revisions`),
   workspaces: () => request<Workspace[]>("/workspaces"),
   workspace: (id: string) => request<Workspace>(`/workspaces/${id}`),
   createWorkspace: (memoId: string) =>

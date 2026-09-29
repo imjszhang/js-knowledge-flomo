@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { Actor, Job, Memo, Workspace } from '../shared/contracts.js';
+import type { Actor, Job, MaterialCandidate, MaterialRelation, Memo, Workspace } from '../shared/contracts.js';
 import type { AIProvider, FlomoProvider } from './provider-types.js';
 import { AppError } from './errors.js';
 import { Store } from './store.js';
@@ -69,9 +69,60 @@ export class WorkbenchService {
   async setMaterials(id: string, memoIds: string[], baseVersion: number, actor: Actor): Promise<Workspace> {
     const current = await this.store.getWorkspace(id);
     this.checkVersion(current, baseVersion);
+    const ids = [...new Set(memoIds)].filter(memoId => memoId !== current.memoId);
+    if (ids.length > 30) throw new AppError('MATERIAL_LIMIT', '每次加工最多选用 30 条材料');
     const materials: Memo[] = [];
-    for (const memoId of [...new Set(memoIds)]) if (memoId !== current.memoId) materials.push(await this.flomo.get(memoId));
-    return this.store.updateWorkspace(id, baseVersion, actor, 'materials', value => ({ ...value, materials }));
+    for (const memoId of ids) materials.push(await this.flomo.get(memoId));
+    return this.store.updateWorkspace(id, baseVersion, actor, 'materials', value => {
+      const selected = new Map(materials.map(memo => [memo.id,memo]));
+      const candidates = (value.materialCandidates ?? []).map(candidate => ({...candidate,
+        memo:selected.get(candidate.memo.id) ?? candidate.memo,
+        status:(selected.has(candidate.memo.id) ? 'selected' : candidate.status === 'selected' ? 'dismissed' : candidate.status) as MaterialCandidate['status'] }));
+      for (const memo of materials) if (!candidates.some(candidate => candidate.memo.id === memo.id))
+        candidates.push({memo,reason:'已选入本次加工',relation:'background',status:'selected'});
+      this.checkCandidateLimit(candidates);
+      return { ...value, materials, materialCandidates:candidates };
+    }, `选用了 ${materials.length} 条材料`);
+  }
+  async proposeCandidates(id: string, items: {memoId:string;reason:string;relation:MaterialRelation}[], baseVersion: number, actor: Actor): Promise<Workspace> {
+    const current = await this.store.getWorkspace(id);
+    this.checkVersion(current,baseVersion);
+    const unique = [...new Map(items.filter(item => item.memoId !== current.memoId).map(item => [item.memoId,item])).values()];
+    const candidateIds = new Set([...(current.materialCandidates ?? []).map(candidate => candidate.memo.id),...unique.map(item => item.memoId)]);
+    if (candidateIds.size > 100) throw new AppError('CANDIDATE_LIMIT', '每次加工最多保留 100 条候选材料');
+    const incoming: MaterialCandidate[] = [];
+    for (const item of unique) incoming.push({memo:await this.flomo.get(item.memoId),reason:item.reason,relation:item.relation,status:'proposed'});
+    return this.store.updateWorkspace(id,baseVersion,actor,'candidates',value => {
+      const candidates = new Map((value.materialCandidates ?? []).map(candidate => [candidate.memo.id,candidate]));
+      for (const item of incoming) candidates.set(item.memo.id,{...item,
+        status:candidates.get(item.memo.id)?.status ?? (value.materials.some(memo => memo.id === item.memo.id) ? 'selected' : 'proposed')});
+      const materialCandidates = [...candidates.values()];
+      this.checkCandidateLimit(materialCandidates);
+      return {...value,materialCandidates,materials:value.materials.map(memo => candidates.get(memo.id)?.memo ?? memo)};
+    }, `更新了 ${incoming.length} 条候选材料及推荐理由`);
+  }
+  chooseCandidate(id: string, memoId: string, status: MaterialCandidate['status'], baseVersion: number, actor: Actor): Promise<Workspace> {
+    return this.store.updateWorkspace(id,baseVersion,actor,'candidate-choice',workspace => {
+      const candidate = workspace.materialCandidates?.find(value => value.memo.id === memoId);
+      if (!candidate) throw new AppError('NOT_FOUND', '候选材料不存在', 404);
+      const materials = workspace.materials.filter(memo => memo.id !== memoId);
+      if (status === 'selected') materials.push(candidate.memo);
+      if (materials.length > 30) throw new AppError('MATERIAL_LIMIT', '每次加工最多选用 30 条材料');
+      return {...workspace,materials,materialCandidates:workspace.materialCandidates!.map(value => value.memo.id === memoId ? {...value,status} : value)};
+    }, status === 'selected' ? '选入了一条材料' : status === 'dismissed' ? '暂不采用一条材料' : '将一条材料放回候选列表');
+  }
+  createDecision(id: string, question: string, options: string[], baseVersion: number, actor: Actor): Promise<Workspace> {
+    return this.store.updateWorkspace(id,baseVersion,actor,'decision',workspace => ({...workspace,
+      decisions:[...(workspace.decisions ?? []),{id:randomUUID(),question,options,answer:null,createdAt:new Date().toISOString(),answeredAt:null}]}));
+  }
+  answerDecision(id: string, decisionId: string, answer: string, baseVersion: number, actor: Actor): Promise<Workspace> {
+    return this.store.updateWorkspace(id,baseVersion,actor,'decision-answer',workspace => {
+      if (!workspace.decisions?.some(decision => decision.id === decisionId)) throw new AppError('NOT_FOUND','待判断的问题不存在',404);
+      return {...workspace,decisions:workspace.decisions.map(decision => decision.id === decisionId ? {...decision,answer,answeredAt:new Date().toISOString()} : decision)};
+    });
+  }
+  private checkCandidateLimit(candidates: MaterialCandidate[]): void {
+    if (candidates.length > 100) throw new AppError('CANDIDATE_LIMIT', '每次加工最多保留 100 条候选材料');
   }
   private checkVersion(workspace: Workspace, version: number): void {
     if (workspace.version !== version) throw new AppError('VERSION_CONFLICT', '内容已被其他入口更新，请读取新版本后合并', 409, { current: workspace });
