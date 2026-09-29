@@ -113,6 +113,7 @@ summary::marker { color: #819180; font-size: 11px; }
 .source-document { font-size: 15px; line-height: 1.95; padding: 0; color: #28322b; }
 .prose { overflow-wrap: anywhere; line-height: 1.95; }
 .prose p { margin: 0 0 1em; }
+.prose p { white-space: pre-line; }
 .prose p:last-child { margin-bottom: 0; }
 .prose h1, .prose h2, .prose h3, .prose h4 { font-size: 1.12em; line-height: 1.7; margin: 1.1em 0 .5em; font-weight: 600; }
 .prose h1 { font-size: 1.3em; }
@@ -227,6 +228,7 @@ summary::marker { color: #819180; font-size: 11px; }
 .memo-index { color: #b3bba9; }
 .memo-content-button { display: block; width: 100%; text-align: left; padding: 11px 0; font-size: 13px; line-height: 1.85; overflow-wrap: anywhere; }
 .memo-content-button:hover:not(:disabled) { background: none; color: var(--green); }
+.memo-content-button p, .material-reading > summary, .material-result-text, .workspace-row p { white-space: pre-line; }
 .memo-tags { display: flex; gap: 7px; flex-wrap: wrap; font-size: 10px; color: #69766c; padding: 4px 0 10px; }
 .memo-card-footer { display: flex; align-items: center; justify-content: space-between; border-top: 1px solid #e8ebe8; padding-top: 10px; }
 .memo-card-footer .text-link { font-size: 11px; }
