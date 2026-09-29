@@ -3,7 +3,7 @@ import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { candidateChoiceSchema, candidatesSchema, contextSchema, decisionSchema, sourceAttachSchema, type ActiveContext, type Actor, type Change, type Workspace } from '../shared/contracts.js';
+import { analysisCardPublishSchema, analysisCardUpdateSchema, analysisCreateSchema, analysisResultSchema, candidateChoiceSchema, candidatesSchema, contextSchema, decisionSchema, discoverySchema, sourceAttachSchema, type ActiveContext, type Actor, type Change, type Workspace } from '../shared/contracts.js';
 
 export class WorkbenchError extends Error {
   constructor(public readonly code: string, message: string, public readonly exitCode = 1, public readonly details?: unknown) {
@@ -179,6 +179,12 @@ const usage = `flomo workbench CLI (requires the local service)
   material set ID --memo ID1,ID2 --base-version N
   material propose ID --file PATH --base-version N
   material decide ID --memo ID --status selected|dismissed|proposed --base-version N
+  material discover ID --terms TERM1,TERM2 [--tag TAG] [--exclude-tag TAG] [--start-date DATE] [--end-date DATE] [--limit N] --base-version N
+  analysis create ID --kind insights|evolution|connections|outline|cards --engine builtin|external [--question TEXT] [--basis ANALYSIS_ID] --base-version N --idempotency-key KEY
+  analysis list ID | analysis get ID --analysis ANALYSIS_ID
+  analysis complete ID --analysis ANALYSIS_ID --file PATH --base-version N
+  analysis card-update ID --analysis ANALYSIS_ID --card CARD_ID --file PATH --base-version N
+  analysis card-publish ID --analysis ANALYSIS_ID --card CARD_ID --base-version N --idempotency-key KEY
   source resolve ID | source get ARTICLE_ID
   source attach ID --article ARTICLE_ID --base-version N
   source detach ID --article ARTICLE_ID --base-version N
@@ -200,6 +206,10 @@ material propose reads a JSON array of {memoId, reason, relation}; decision add 
 material set changes only flomo materials; collector materials use source attach/detach.
 source resolve finds collector articles linked from the source and selected flomo materials.
 source attach saves a full article snapshot; attaching it again explicitly refreshes that snapshot.
+material discover searches each comma/newline-separated term and proposes full notes; it does not select them.
+analysis complete reads {text, cards?}; card-update reads {title, body, tags, sourceKeys}.
+external analyses prepare sources and instructions for an agent; saving a result does not publish cards.
+card-publish creates a new flomo note after review; check analysis get until its card is published.
 FLOMO_WORKBENCH_URL defaults to http://127.0.0.1:3000.
 Exit codes: 0 success; 1 service error; 2 invalid input; 3 version conflict; 4 service unavailable.
 Reuse an idempotency key only when retrying the exact same AI/publish operation.
@@ -216,6 +226,8 @@ const optionTypes: Record<string, { type: 'string' | 'boolean' }> = {
   view: { type: 'string' }, 'base-revision': { type: 'string' }, summary: { type: 'string' },
   status: { type: 'string' }, decision: { type: 'string' }, 'context-revision': { type: 'string' },
   article: { type: 'string' },
+  terms: { type: 'string' }, kind: { type: 'string' }, engine: { type: 'string' }, question: { type: 'string' },
+  basis: { type: 'string' }, analysis: { type: 'string' }, card: { type: 'string' },
 };
 
 const commandOptions: Record<string, { flags: string[]; id?: boolean }> = {
@@ -233,6 +245,12 @@ const commandOptions: Record<string, { flags: string[]; id?: boolean }> = {
   'material set': { flags: ['memo', 'base-version'], id: true },
   'material propose': { flags: ['file', 'base-version'], id: true },
   'material decide': { flags: ['memo', 'status', 'base-version'], id: true },
+  'material discover': { flags: ['terms', 'tag', 'exclude-tag', 'start-date', 'end-date', 'limit', 'base-version'], id: true },
+  'analysis create': { flags: ['kind', 'engine', 'question', 'basis', 'base-version', 'idempotency-key'], id: true },
+  'analysis list': { flags: [], id: true }, 'analysis get': { flags: ['analysis'], id: true },
+  'analysis complete': { flags: ['analysis', 'file', 'base-version'], id: true },
+  'analysis card-update': { flags: ['analysis', 'card', 'file', 'base-version'], id: true },
+  'analysis card-publish': { flags: ['analysis', 'card', 'base-version', 'idempotency-key'], id: true },
   'source resolve': { flags: [], id: true }, 'source get': { flags: [], id: true },
   'source attach': { flags: ['article', 'base-version'], id: true },
   'source detach': { flags: ['article', 'base-version'], id: true },
@@ -245,7 +263,7 @@ const commandOptions: Record<string, { flags: string[]; id?: boolean }> = {
   'changes list': { flags: ['after'] }, 'changes watch': { flags: ['after'] },
   'settings get': { flags: [] }, 'settings set': { flags: ['file'] }, 'service status': { flags: [] },
 };
-for (const command of ['annotation create', 'workspace refresh', 'workspace rebase', 'workspace goal', 'draft update', 'draft publish', 'material set', 'material propose', 'material decide', 'source attach', 'source detach', 'decision add', 'decision answer', 'message add', 'ai run']) {
+for (const command of ['annotation create', 'workspace refresh', 'workspace rebase', 'workspace goal', 'draft update', 'draft publish', 'material set', 'material propose', 'material decide', 'material discover', 'analysis create', 'analysis complete', 'analysis card-update', 'analysis card-publish', 'source attach', 'source detach', 'decision add', 'decision answer', 'message add', 'ai run']) {
   commandOptions[command]!.flags.push('context-revision');
 }
 
@@ -272,7 +290,7 @@ export async function runCli(args: string[], io: CliIO = defaultIO, suppliedClie
     const command = `${group} ${action}`;
     const spec = commandOptions[command];
     if (!spec || positionals.length !== (spec.id ? 3 : 2)) throw new WorkbenchError('INVALID_COMMAND', 'Unknown command or incorrect positional arguments. Run with --help.', 2);
-    if (group === 'source' && !id) throw new WorkbenchError('INVALID_ARGUMENT', 'A nonempty workspace or article ID is required.', 2);
+    if ((group === 'source' || group === 'analysis' || command === 'material discover') && !id?.trim()) throw new WorkbenchError('INVALID_ARGUMENT', 'A nonempty workspace or article ID is required.', 2);
     for (const key of Object.keys(values)) {
       if (key !== 'json' && !spec.flags.includes(key)) throw new WorkbenchError('INVALID_ARGUMENT', `Option --${key} does not apply to ${command}.`, 2);
     }
@@ -347,6 +365,46 @@ export async function runCli(args: string[], io: CliIO = defaultIO, suppliedClie
         const parsed = candidateChoiceSchema.safeParse({ status: string('status', true), baseVersion: integer('base-version') });
         if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', '--status must be selected, dismissed or proposed.', 2);
         result = await workspaceRequest('PATCH', `/candidates/${encodeURIComponent(memoId)}`, parsed.data);
+        break;
+      }
+      case 'material discover': {
+        const parsed = discoverySchema.safeParse({ terms: string('terms', true)!.split(/[,，\r\n]+/).map(term => term.trim()).filter(Boolean), tag: string('tag'), excludeTag: string('exclude-tag'), startDate: string('start-date'), endDate: string('end-date'), limit: integer('limit', 20), baseVersion: integer('base-version') });
+        if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', 'Use 1–6 terms (up to 100 characters each), ISO dates (YYYY-MM-DD), and a limit between 1 and 30.', 2);
+        result = await workspaceRequest('POST', '/discover', parsed.data);
+        break;
+      }
+      case 'analysis create': {
+        const parsed = analysisCreateSchema.safeParse({ kind: string('kind', true), engine: string('engine', true), question: string('question'), basisAnalysisId: string('basis'), baseVersion: integer('base-version'), idempotencyKey: string('idempotency-key', true) });
+        if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', 'Use kind insights, evolution, connections, outline or cards; engine builtin or external; question up to 5000 characters; and a nonempty idempotency key up to 200 characters.', 2);
+        result = await workspaceRequest('POST', '/analyses', parsed.data);
+        break;
+      }
+      case 'analysis list': result = await workspaceRequest('GET', '/analyses'); break;
+      case 'analysis get': result = await workspaceRequest('GET', `/analyses/${encodeURIComponent(string('analysis', true)!)}`); break;
+      case 'analysis complete':
+      case 'analysis card-update': {
+        const analysisId = string('analysis', true)!;
+        const cardId = command === 'analysis card-update' ? string('card', true)! : undefined;
+        const file = await jsonFile();
+        if (!file || typeof file !== 'object' || Array.isArray(file) || 'baseVersion' in file) throw new WorkbenchError('INVALID_ARGUMENT', 'Input file must contain a JSON object without baseVersion; supply the version separately with --base-version.', 2);
+        const input = { ...file, baseVersion: integer('base-version') };
+        if (command === 'analysis complete') {
+          const parsed = analysisResultSchema.safeParse(input);
+          if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', 'Result file must contain {text, cards?}. Each card requires title, body, tags and sourceKeys from the analysis.', 2);
+          result = await workspaceRequest('POST', `/analyses/${encodeURIComponent(analysisId)}/result`, parsed.data);
+        } else {
+          const parsed = analysisCardUpdateSchema.safeParse(input);
+          if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', 'Card file must contain {title, body, tags, sourceKeys}; tags omit # and sourceKeys must refer to analysis sources.', 2);
+          result = await workspaceRequest('PATCH', `/analyses/${encodeURIComponent(analysisId)}/cards/${encodeURIComponent(cardId!)}`, parsed.data);
+        }
+        break;
+      }
+      case 'analysis card-publish': {
+        const analysisId = string('analysis', true)!;
+        const cardId = string('card', true)!;
+        const parsed = analysisCardPublishSchema.safeParse({ baseVersion: integer('base-version'), idempotencyKey: string('idempotency-key', true) });
+        if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', '--idempotency-key must contain 1 to 200 characters.', 2);
+        result = await workspaceRequest('POST', `/analyses/${encodeURIComponent(analysisId)}/cards/${encodeURIComponent(cardId)}/publish`, parsed.data);
         break;
       }
       case 'source resolve': result = await workspaceRequest('GET', '/sources'); break;

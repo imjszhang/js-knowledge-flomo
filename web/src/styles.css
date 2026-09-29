@@ -371,3 +371,49 @@ summary::marker { color: #819180; font-size: 11px; }
 .collector-match .material-actions, .collector-material .material-actions { flex-wrap: wrap; }
 .collector-match .selected-label { font-size: 11px; line-height: 1.7; }
 .collector-material > .scope-notice { margin-top: 11px; padding-bottom: 0; }
+
+/* Topic discovery and source-backed analysis share the workspace's reading rhythm. */
+.analysis-panel, .topic-discovery { margin: 18px 0; }
+.analysis-form { display: grid; gap: 13px; padding-top: 8px; }
+.analysis-form > label, .analysis-filter-grid > label { display: flex; flex-direction: column; gap: 7px; font-size: 12px; color: #526452; }
+.analysis-form textarea, .analysis-form input:not([type="checkbox"]), .analysis-form select { width: 100%; min-width: 0; border: 1px solid #dce3dd; border-radius: 6px; background: white; color: #314434; padding: 10px; font: inherit; font-size: 13px; line-height: 1.8; }
+.analysis-form textarea { resize: vertical; }
+.analysis-form small { font-size: 11px; line-height: 1.7; color: var(--muted); }
+.analysis-form .quiet-disclosure { margin: 0; }
+.analysis-filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; padding-top: 12px; }
+.analysis-form > .analysis-limit { display: flex; flex-direction: row; align-items: center; }
+.analysis-limit select { width: auto; }
+.analysis-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 12px; }
+.analysis-form .analysis-actions { margin-top: 0; }
+.analysis-form .agent-inline-note { padding: 0; margin: 0; }
+.analysis-record { margin: 18px 0; padding: 17px; background: white; border: 1px solid #dce4d9; border-radius: 9px; }
+.analysis-record-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.analysis-record-heading h3, .analysis-record-heading h4 { margin: 0; font-size: 14px; line-height: 1.7; font-weight: 550; overflow-wrap: anywhere; }
+.analysis-record-heading > span { display: flex; align-items: center; gap: 5px; flex-shrink: 0; color: #7b8e6d; font-size: 11px; line-height: 1.8; }
+.analysis-meta { color: var(--muted); font-size: 11px; line-height: 1.8; margin: 7px 0; }
+.analysis-question { font-size: 13px; line-height: 1.8; padding: 8px 0; }
+.analysis-output { font-size: 14px; line-height: 1.9; margin: 12px 0; }
+.analysis-output .prose { overflow-wrap: anywhere; }
+.analysis-sources { margin: 14px 0; padding-top: 10px; border-top: 1px solid #e7ece4; font-size: 12px; color: var(--muted); }
+.analysis-sources > summary, .analysis-source > summary { cursor: pointer; line-height: 1.8; }
+.analysis-source { margin: 12px 0; padding-left: 8px; border-left: 2px solid #e7ece4; }
+.analysis-source > summary { overflow-wrap: anywhere; }
+.analysis-source .relation-chip { margin-right: 7px; }
+.analysis-source .prose { color: #425344; font-size: 13px; line-height: 1.8; max-height: 320px; overflow: auto; }
+.analysis-cards { margin-top: 20px; }
+.analysis-card { margin-top: 15px; padding: 16px; background: #f8faf6; border: 1px solid #e1e8dd; border-radius: 7px; }
+.analysis-card .analysis-record-heading > span { color: #77826a; }
+.analysis-card .selected-label { padding: 10px 0; font-size: 12px; }
+.analysis-source-choices { border: 0; padding: 0; min-width: 0; }
+.analysis-source-choices legend { font-size: 12px; color: #526452; margin-bottom: 8px; }
+.analysis-source-choices > label { display: flex; align-items: flex-start; gap: 7px; font-size: 12px; line-height: 1.8; padding: 5px 0; }
+.analysis-source-choices input { flex-shrink: 0; margin-top: 4px; accent-color: var(--green); }
+.analysis-source-choices span { overflow-wrap: anywhere; }
+.discovery-result { margin-top: 15px; padding: 12px; border-radius: 7px; background: #f2f6ec; color: #526452; font-size: 12px; line-height: 1.8; }
+.discovery-result ul { padding-left: 18px; overflow-wrap: anywhere; }
+@media (max-width: 480px) {
+  .analysis-filter-grid { grid-template-columns: 1fr; }
+  .analysis-record, .analysis-card { padding: 12px; }
+  .analysis-record-heading { flex-wrap: wrap; gap: 5px; }
+  .analysis-record .analysis-actions .button { white-space: normal; }
+}

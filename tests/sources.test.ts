@@ -26,7 +26,7 @@ class FakeCollector implements CollectorProvider {
     if (url.endsWith('/offline')) throw new Error('secret upstream error');
     if (url.endsWith('/missing')) return [];
     if (url.endsWith('/many')) return [this.article,{...this.article,id:'article-2'}];
-    return [this.article];
+    return url === this.article.sourceUrl ? [this.article] : [];
   }
   async get(id: string) { this.gets++; return structuredClone({...this.article,id}); }
 }
@@ -57,6 +57,44 @@ test('source resolution deduplicates shared URLs, distinguishes missing/ambiguou
     assert.deepEqual(await f.store.getWorkspace(w.id),w);
     assert.deepEqual(await f.store.changes(),before);
     assert.equal(collector.gets,0,'matching should not fetch full articles');
+  } finally { await f.close(); }
+});
+
+test('escaped summary URLs match collector sources once and retain both memo associations when selected', async () => {
+  const cleanUrl = 'https://www.zhihu.com/question/2078550836104394358/answer/2087601635543495695?share_code=p9oOzR7JMXOw&utm_psn=2088411714484290935';
+  const escapedLabel = cleanUrl.replaceAll('_','\\_');
+  const escapedTarget = cleanUrl.replaceAll('&','\\&');
+  const collector = new FakeCollector();
+  collector.article.sourceUrl = cleanUrl;
+  const f = await setup(collector);
+  try {
+    const source = memo('source',`#概要\n原文：${escapedLabel}`);
+    const material = memo('m2',`相关概要\n[${escapedLabel}](${escapedTarget})`);
+    const w = await f.store.updateWorkspace(f.workspace.id,1,'web','materials',workspace => ({...workspace,
+      source,materials:[material],draft:'保留用户尚未完成的草稿'}));
+    const changes = await f.store.changes();
+
+    const found = await f.service.resolveSources(w.id);
+    assert.equal(found.configured,true);
+    assert.equal(found.truncated,false);
+    assert.deepEqual(collector.finds,[cleanUrl],'only the exact original URL should reach the collector');
+    assert.equal(found.items.length,1);
+    assert.equal(found.items[0].url,cleanUrl);
+    assert.equal(found.items[0].status,'matched');
+    assert.deepEqual(found.items[0].memoIds,['source','m2']);
+    assert.deepEqual(found.items[0].articles,[collector.article]);
+    assert.deepEqual(await f.store.getWorkspace(w.id),w);
+    assert.deepEqual(await f.store.changes(),changes);
+    assert.equal(collector.gets,0);
+
+    const selected = await f.service.attachSource(w.id,collector.article.id,w.version,'web');
+    assert.deepEqual(selected.collectorMaterials![0].memoIds,['source','m2']);
+    assert.equal(selected.collectorMaterials![0].article.sourceUrl,cleanUrl);
+    assert.equal(selected.collectorMaterials![0].article.content,collector.article.content);
+    assert.deepEqual(selected.source,source);
+    assert.deepEqual(selected.materials,[material]);
+    assert.equal(selected.draft,w.draft);
+    assert.equal(collector.gets,1);
   } finally { await f.close(); }
 });
 

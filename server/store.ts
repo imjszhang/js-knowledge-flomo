@@ -171,12 +171,12 @@ export class Store {
 }
 
 function hydrateWorkspace(workspace: Workspace): Workspace {
-  return { ...workspace, goal:workspace.goal ?? '', materialCandidates:workspace.materialCandidates ?? [], collectorMaterials:workspace.collectorMaterials ?? [], decisions:workspace.decisions ?? [] };
+  return { ...workspace, goal:workspace.goal ?? '', materialCandidates:workspace.materialCandidates ?? [], collectorMaterials:workspace.collectorMaterials ?? [], decisions:workspace.decisions ?? [], analyses:workspace.analyses ?? [] };
 }
 
 function changeSummary(kind: string): string {
   const descriptions: Record<string,string> = { draft:'更新了草稿', goal:'更新了本次加工目标', materials:'更新了选用材料', candidates:'添加了候选材料',
-    'candidate-choice':'更新了材料选择', sources:'更新了收藏原文材料', decision:'提出了待判断的问题', 'decision-answer':'回答了待判断的问题',
+    'candidate-choice':'更新了材料选择', sources:'更新了收藏原文材料', analysis:'更新了材料分析', 'analysis-card':'更新了候选卡片', discovery:'按主题查找了材料', decision:'提出了待判断的问题', 'decision-answer':'回答了待判断的问题',
     message:'更新了讨论记录', refreshed:'检查了 flomo 原文', rebased:'确认了新的原文基线', 'remote-conflict':'发现 flomo 原文变化',
     published:'已写回 flomo', 'publication-abandoned':'结束了写回结果跟踪' };
   return descriptions[kind] ?? '更新了工作内容';

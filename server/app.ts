@@ -4,7 +4,8 @@ import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { z, ZodError } from 'zod';
 import { createWorkspaceSchema, updateDraftSchema, materialsSchema, messageSchema, aiSchema, publishSchema, settingsSchema, versionSchema,
-  contextSchema, goalSchema, candidatesSchema, candidateChoiceSchema, decisionSchema, decisionAnswerSchema, sourceAttachSchema } from '../shared/contracts.js';
+  contextSchema, goalSchema, candidatesSchema, candidateChoiceSchema, decisionSchema, decisionAnswerSchema, sourceAttachSchema,
+  discoverySchema, analysisCreateSchema, analysisResultSchema, analysisCardUpdateSchema, analysisCardPublishSchema } from '../shared/contracts.js';
 import type { Actor, Change } from '../shared/contracts.js';
 import { AppError } from './errors.js';
 import { ProviderError } from './provider-types.js';
@@ -74,6 +75,36 @@ export async function createApp({ service, webRoot, flomoConfigured, periodicRef
     return service.createWorkspace(body.memoId, body.title, actor(request));
   });
   app.get(`${root}/workspaces/:id`, request => store.getWorkspace(idOf(request)));
+  const analysisParams = z.object({id:z.string().min(1),analysisId:z.string().min(1)});
+  const cardParams = analysisParams.extend({cardId:z.string().min(1)});
+  app.post(`${root}/workspaces/:id/discover`, request => service.analysis.discover(idOf(request),discoverySchema.parse(request.body),actor(request)));
+  app.get(`${root}/workspaces/:id/analyses`, async request => (await store.getWorkspace(idOf(request))).analyses ?? []);
+  app.get(`${root}/workspaces/:id/analyses/:analysisId`, async request => {
+    const {id,analysisId} = analysisParams.parse(request.params);
+    const record = (await store.getWorkspace(id)).analyses?.find(item => item.id === analysisId);
+    if (!record) throw new AppError('NOT_FOUND','分析记录不存在',404);
+    return record;
+  });
+  app.post(`${root}/workspaces/:id/analyses`, async (request,reply) => {
+    const body = analysisCreateSchema.parse(request.body);
+    const workspace = await service.analysis.create(idOf(request),body,actor(request));
+    reply.code(202);
+    return workspace;
+  });
+  app.post(`${root}/workspaces/:id/analyses/:analysisId/result`, request => {
+    const {id,analysisId} = analysisParams.parse(request.params);
+    return service.analysis.complete(id,analysisId,analysisResultSchema.parse(request.body),actor(request));
+  });
+  app.patch(`${root}/workspaces/:id/analyses/:analysisId/cards/:cardId`, request => {
+    const {id,analysisId,cardId} = cardParams.parse(request.params);
+    return service.analysis.updateCard(id,analysisId,cardId,analysisCardUpdateSchema.parse(request.body),actor(request));
+  });
+  app.post(`${root}/workspaces/:id/analyses/:analysisId/cards/:cardId/publish`, async (request,reply) => {
+    const {id,analysisId,cardId} = cardParams.parse(request.params);
+    const workspace = await service.analysis.publishCard(id,analysisId,cardId,analysisCardPublishSchema.parse(request.body),actor(request));
+    reply.code(202);
+    return workspace;
+  });
   app.get(`${root}/workspaces/:id/sources`, request => service.resolveSources(idOf(request)));
   app.get(`${root}/sources/:id`, request => service.getSource(idOf(request)));
   app.post(`${root}/workspaces/:id/sources`, request => {

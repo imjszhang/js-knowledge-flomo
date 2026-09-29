@@ -1,5 +1,9 @@
 import type {
   ActiveContext,
+  AnalysisCardInput,
+  AnalysisRecord,
+  AnalysisKind,
+  DiscoveryResult,
   CollectorArticle,
   DraftRevision,
   MaterialCandidate,
@@ -75,6 +79,15 @@ export const api = {
   context: () => request<ActiveContext>("/context"),
   setContext: (workspaceId: string | null, view: WorkbenchView, baseRevision: number) =>
     mutation<ActiveContext>("/context", { workspaceId, view, baseRevision }, "PUT"),
+  discover: (id: string, input: {terms: string[]; tag?: string; excludeTag?: string; startDate?: string; endDate?: string; limit: number; baseVersion: number}) =>
+    mutation<DiscoveryResult>(`/workspaces/${encodeURIComponent(id)}/discover`, input),
+  analyses: (id: string) => request<AnalysisRecord[]>(`/workspaces/${encodeURIComponent(id)}/analyses`),
+  createAnalysis: (id: string, input: {kind: AnalysisKind; question: string; engine: "builtin" | "external"; basisAnalysisId?: string; baseVersion: number; idempotencyKey: string}) =>
+    mutation<Workspace>(`/workspaces/${encodeURIComponent(id)}/analyses`, input),
+  saveAnalysisCard: (id: string, analysisId: string, cardId: string, input: AnalysisCardInput & {baseVersion: number}) =>
+    mutation<Workspace>(`/workspaces/${encodeURIComponent(id)}/analyses/${encodeURIComponent(analysisId)}/cards/${encodeURIComponent(cardId)}`, input, "PATCH"),
+  publishAnalysisCard: (id: string, analysisId: string, cardId: string, baseVersion: number, idempotencyKey: string) =>
+    mutation<Workspace>(`/workspaces/${encodeURIComponent(id)}/analyses/${encodeURIComponent(analysisId)}/cards/${encodeURIComponent(cardId)}/publish`, {baseVersion, idempotencyKey}),
   goal: (id: string, goal: string, baseVersion: number) =>
     mutation<Workspace>(`/workspaces/${id}/goal`, { goal, baseVersion }, "PATCH"),
   chooseCandidate: (id: string, memoId: string, status: MaterialCandidate["status"], baseVersion: number) =>
