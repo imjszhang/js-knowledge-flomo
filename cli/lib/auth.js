@@ -47,6 +47,7 @@ export async function clearAuth() {
  * 获取有效的 access_token，如果不存在则启动 OAuth 流程
  * @param {Object} [options]
  * @param {boolean} [options.force] 强制重新授权
+ * @param {boolean} [options.interactive=true] 是否允许打开浏览器重新授权
  * @returns {Promise<string>} access_token
  */
 export async function getAccessToken(options = {}) {
@@ -58,12 +59,22 @@ export async function getAccessToken(options = {}) {
         const saved = await loadAuth();
         if (saved?.access_token) {
             if (saved.expires_at && Date.now() >= saved.expires_at && saved.refresh_token) {
-                return await refreshAccessToken(saved);
+                return await refreshAccessToken(saved, options);
+            }
+            if (saved.expires_at && Date.now() >= saved.expires_at && options.interactive === false) {
+                throw authRequiredError();
             }
             return saved.access_token;
         }
     }
+    if (options.interactive === false) throw authRequiredError();
     return await startOAuthFlow();
+}
+
+function authRequiredError() {
+    return Object.assign(new Error('flomo 授权缺失或已失效，请运行 npm run cli -- auth 重新授权。'), {
+        code: 'FLOMO_AUTH_REQUIRED',
+    });
 }
 
 /**
@@ -172,7 +183,7 @@ async function startOAuthFlow() {
 /**
  * 刷新 access_token
  */
-async function refreshAccessToken(saved) {
+async function refreshAccessToken(saved, options = {}) {
     const { stderr } = await import('node:process');
     stderr.write('正在刷新 access_token...\n');
 
@@ -187,6 +198,7 @@ async function refreshAccessToken(saved) {
     });
 
     if (!res.ok) {
+        if (options.interactive === false) throw authRequiredError();
         stderr.write('Token 刷新失败，重新授权...\n');
         await clearAuth();
         return await startOAuthFlow();

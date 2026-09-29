@@ -7,3 +7,8 @@ work_dir/
 .DS_Store
 Thumbs.db
 .flomo-auth.json
+dist/
+coverage/
+*.workbench.lock
+*.workbench.lock.guard
+.workbench-test/

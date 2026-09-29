@@ -6,19 +6,45 @@
   "license": "MIT",
   "type": "module",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.12.0"
   },
   "scripts": {
     "cli": "node cli/cli.js",
-    "dev": "node cli/cli.js serve",
-    "mcp": "node mcp-server/index.mjs"
+    "dev": "concurrently -k -n server,web \"npm run dev:server\" \"npm run dev:web\"",
+    "mcp": "node mcp-server/index.mjs",
+    "dev:server": "tsx watch server/index.ts",
+    "dev:web": "vite --config web/vite.config.ts",
+    "dev:legacy": "node cli/cli.js serve",
+    "build": "tsc -p tsconfig.server.json && vite build --config web/vite.config.ts",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/server/index.js",
+    "workbench": "tsx cli/workbench.ts",
+    "mcp:workbench": "tsx mcp-server/workbench.ts",
+    "test": "tsx --test tests/*.test.ts"
   },
   "dependencies": {
+    "@fastify/static": "^10.1.5",
     "@modelcontextprotocol/sdk": "^1.12.1",
+    "@tanstack/react-query": "^5.104.0",
     "dotenv": "^16.4.7",
+    "fastify": "^5.12.5",
+    "lucide-react": "^1.48.0",
     "open": "^10.1.0",
     "openai": "^6.26.0",
-    "sqlite3": "^5.1.7",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "react-markdown": "^10.1.0",
+    "sqlite3": "^6.0.1",
     "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1"
   }
 }

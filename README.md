@@ -2,7 +2,11 @@
 
 **以 flomo 为核心的知识管理工具** — 通过 MCP 读写笔记，用 AI 做洞察、关联发现、标签整理与写作辅助。
 
-[![Node.js](https://img.shields.io/badge/Node.js-18+-green.svg)](https://nodejs.org/)
+现在支持 **TypeScript 知识工作台**：React Web、CLI 和 MCP 共用一个 Node.js 服务。你可以在网页中编辑待编笔记，也可以让 Codex 通过 CLI 查材料、更新草稿；页面自动收到更新，发生并发编辑时保留本地输入并提示比较。
+
+工作台支持五个置顶入口、完整原文与材料、自动保存草稿、多轮讨论、流式 AI、远端刷新、版本冲突处理和可核对的写回任务。使用方法、Agent 命令和同步边界详见 **[工作台指南](WORKBENCH.md)**。
+
+[![Node.js](https://img.shields.io/badge/Node.js-22.12+-green.svg)](https://nodejs.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ---
@@ -34,7 +38,7 @@
 
 ### 环境要求
 
-- **Node.js** ≥ 18  
+- **Node.js** ≥ 22.12
 - **flomo 账号**（用于 OAuth）  
 - **OpenAI 兼容 API**（仅 AI 功能需要；纯笔记/标签操作可不配）
 
@@ -85,11 +89,26 @@ node cli/cli.js insights --tag 读书 --period 30
 ### 5. 启动 Web UI（可选）
 
 ```bash
+# 开发：Node 后台 + Vite 前端
 npm run dev
-# 或：node cli/cli.js serve
+
+# 正式运行：单个 Node 服务提供页面与 API
+npm run build
+npm start
 ```
 
-浏览器打开 **http://127.0.0.1:3000**，可搜索笔记、看标签、生成洞察、查看本地统计。
+开发时打开 **http://127.0.0.1:5173**；正式运行时打开 **http://127.0.0.1:3000**。两种方式的 CLI 都连接后台端口 3000。已有服务占用端口时先停止旧服务。
+
+```bash
+# Codex / Agent 读取待编（包括子标签）
+npm run --silent workbench -- memo list --tag 待编 --json
+# 查看共享加工会话
+npm run --silent workbench -- workspace list --json
+# 订阅网页、CLI、MCP 的更新
+npm run --silent workbench -- changes watch --after 0 --json
+```
+
+旧版搜索、洞察、缓存统计页面保留在 `npm run dev:legacy`，原 CLI、MCP、OpenClaw 入口保持兼容。新工作台加工状态请统一使用 `workbench` / `mcp:workbench`；旧入口直接修改 flomo 后，新工作台通过刷新原文检测变化。
 
 ---
 
@@ -156,6 +175,21 @@ node cli/cli.js stats            # 本地缓存统计
 | `LLM_API_KEY` | LLM API 密钥 | — |
 | `LLM_API_MODEL` | 模型名 | `gpt-4.1-mini` |
 | `DB_PATH` | 本地缓存库路径 | `./data/cache.db` |
+| `WORKBENCH_DB_PATH` | 工作台数据库路径，默认沿用 DB_PATH | `./data/cache.db` |
+| `PORT` | 工作台后台端口 | `3000` |
+| `FLOMO_WORKBENCH_URL` | CLI / MCP 连接的工作台地址 | `http://127.0.0.1:3000` |
+
+数据库新增独立的 `workbench_*` 表，保留已有缓存和洞察。它还保存未写回的草稿、讨论和任务，因此需要备份；请停止工作台服务后复制数据库文件，或使用 SQLite 的在线备份工具，运行中不要只复制主数据库而遗漏 WAL。
+
+### 开发验证
+
+```bash
+npm run typecheck
+npm test
+npm run build
+```
+
+测试使用临时数据库和模拟 flomo / AI，不会修改真实笔记。
 
 ### OpenClaw 插件配置
 
