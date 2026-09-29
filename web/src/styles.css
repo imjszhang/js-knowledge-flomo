@@ -155,7 +155,10 @@ summary::marker { color: #819180; font-size: 11px; }
 .material-reading > summary { list-style: none; font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; color: #28352d; }
 .material-reading > summary::-webkit-details-marker { display: none; }
 .expand-label { display: flex; align-items: center; gap: 3px; color: #708078; font-size: 11px; margin-top: 8px; }
-.material-reading[open] .expand-label { display: none; }
+.material-reading .when-expanded { display: none; }
+.material-reading[open] .material-excerpt, .material-reading[open] .when-collapsed { display: none; }
+.material-reading[open] .when-expanded { display: inline; }
+.material-reading[open] .expand-label svg { transform: rotate(180deg); }
 .material-reading[open] > summary { margin-bottom: 13px; padding-bottom: 12px; border-bottom: 1px solid #e4e9dd; }
 .material-reading > .prose { font-size: 14px; margin-bottom: 12px; }
 .material-reason { font-size: 12px; color: #69766c; margin-top: 16px; padding-top: 13px; border-top: 1px solid #edf0ed; line-height: 1.8; overflow-wrap: anywhere; }
