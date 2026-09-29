@@ -17,6 +17,12 @@ function deferred() {
 class FakeFlomo implements FlomoProvider {
   memo: Memo = { id:'m1', url:'https://v.flomoapp.com/mine/?memo_id=m1', content:'原始想法 #待编/想法', tags:['待编/想法'],
     created_at:'2026-09-29T01:00:00Z',updated_at:'2026-09-29T01:00:00Z',content_truncated:false,linked_memos:[] };
+  creates = 0;
+  async create(content: string) {
+    this.creates++;
+    if (this.uncertain) throw new Error('network timeout after create');
+    return {...this.memo, id:'new-note', content, linked_memos:['m1']};
+  }
   writes = 0;
   uncertain = false;
   updateGate?: ReturnType<typeof deferred>;
@@ -198,4 +204,33 @@ test('SSE replays a durable cursor and delivers a subsequent CLI update', async 
     assert.match(text,/"actor":"cli"/);
     controller.abort();
   } finally { controller.abort(); await app.close(); await f.close(); }
+});
+
+
+test('annotation creates a linked note exactly once and preserves source and draft', async () => {
+  const f = await setup();
+  try {
+    const [one,two] = await Promise.all([f.service.annotate(f.workspace.id,'我的判断 #想法','annotation-key','web'), f.service.annotate(f.workspace.id,'我的判断 #想法','annotation-key','cli')]);
+    assert.equal(one.id,two.id);
+    await f.service.settle();
+    const job = await f.store.getJob(one.id);
+    assert.equal(job.status,'succeeded');
+    assert.equal(job.resultMemo?.content,'我的判断 #想法\n\n关联原笔记：https://v.flomoapp.com/mine/?memo_id=m1');
+    assert.equal(f.flomo.creates,1);
+    assert.equal(f.flomo.writes,0);
+    assert.deepEqual(await f.store.getWorkspace(f.workspace.id),f.workspace);
+    await assert.rejects(f.service.annotate(f.workspace.id,'另一个内容','annotation-key','web'), {code:'IDEMPOTENCY_CONFLICT'});
+  } finally {await f.close();}
+});
+
+test('uncertain annotation creation is not retried', async () => {
+  const f = await setup();
+  try {
+    f.flomo.uncertain = true;
+    const job = await f.service.annotate(f.workspace.id,'我的想法','uncertain-key','web');
+    await f.service.settle();
+    assert.equal((await f.store.getJob(job.id)).status,'uncertain');
+    await f.service.annotate(f.workspace.id,'我的想法','uncertain-key','web');
+    assert.equal(f.flomo.creates,1);
+  } finally {await f.close();}
 });

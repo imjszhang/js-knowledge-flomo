@@ -37,8 +37,8 @@ export class WorkbenchService {
   async recover(): Promise<void> {
     for (const job of await this.store.listJobs()) {
       if (job.status !== 'running') continue;
-      await this.store.putJob({ ...job, status: job.kind === 'publish' ? 'uncertain' : 'failed',
-        error: job.kind === 'publish' ? '服务曾中断，请核对远端写回结果；不会自动重试' : '服务曾中断，请重新发起生成', updatedAt: new Date().toISOString() });
+      await this.store.putJob({ ...job, status: job.kind !== 'ai' ? 'uncertain' : 'failed',
+        error: job.kind !== 'ai' ? '服务曾中断，请核对远端写回结果；不会自动重试' : '服务曾中断，请重新发起生成', updatedAt: new Date().toISOString() });
     }
   }
   async createWorkspace(memoId: string, title: string | undefined, actor: Actor): Promise<Workspace> {
@@ -173,6 +173,31 @@ export class WorkbenchService {
           job = { ...job, status:'failed', text:partial, error: message(error), updatedAt:new Date().toISOString() };
         } finally { this.controllers.delete(controller); }
         await this.store.putJob(job);
+      });
+      return job;
+    });
+  }
+  async annotate(id: string, content: string, key: string, actor: Actor): Promise<Job> {
+    return this.locked(id, async () => {
+      const hash = this.requestHash('annotation', 0, content);
+      const existing = await this.existingJob(id, 'annotation', key, hash);
+      if (existing) return existing;
+      if (!this.flomo.create) throw new AppError('CREATE_UNAVAILABLE', '当前接入不支持新建笔记', 503);
+      const workspace = await this.store.getWorkspace(id);
+      const now = new Date().toISOString();
+      const targetContent = `${content.trim()}\n\n关联原笔记：https://v.flomoapp.com/mine/?memo_id=${encodeURIComponent(workspace.memoId)}`;
+      const job: Job & {requestHash:string} = {id:randomUUID(), workspaceId:id, kind:'annotation', status:'running', actor,
+        text:'', error:null, createdAt:now, updatedAt:now, idempotencyKey:key, baseVersion:workspace.version, targetContent, requestHash:hash};
+      await this.store.putJob(job);
+      this.background(async () => {
+        try {
+          const resultMemo = await this.flomo.create!(targetContent);
+          const linked = resultMemo.linked_memos.includes(workspace.memoId);
+          await this.store.putJob({...job, resultMemo, status:linked ? 'succeeded' : 'uncertain', text:linked ? '已创建批注并关联原笔记' : '',
+            error:linked ? null : '新笔记已创建，但双链尚未确认，请打开新笔记核对，勿重复创建。', updatedAt:new Date().toISOString()});
+        } catch (error) {
+          await this.store.putJob({...job,status:'uncertain',error:`创建结果待核实：${message(error)}。请在 flomo 核对，勿重复创建。`,updatedAt:new Date().toISOString()});
+        }
       });
       return job;
     });

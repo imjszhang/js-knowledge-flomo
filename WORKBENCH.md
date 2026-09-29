@@ -244,3 +244,5 @@ npm run --silent workbench -- job get JOB_ID --json
 服务默认用于本机受信任的 Web 和 Agent。直接把端口暴露到公网前需要单独设计身份验证和访问控制。
 
 材料查找支持“不包含标签”，排除该标签及其子标签，并可与关键词、包含标签组合。CLI 使用 `memo list --exclude-tag 概要`，MCP 使用 `workbench_memo_list` 的 `excludeTag`。排除在远端返回的有限候选中执行，结果可能不完整。
+
+在「笔记」视图点击「写批注」，输入自己的想法后选择「创建批注笔记」。新笔记自动附上原笔记链接形成 flomo 双链，原文和工作草稿保持不变。输入会保存在当前浏览器，创建记录经 Web/CLI/MCP 共享。CLI：`annotation create WORKSPACE_ID --text '我的想法 #想法' --idempotency-key UNIQUE_KEY`；MCP：`workbench_annotation_create`。提交重试必须复用同一请求标识；结果待核实时先到 flomo 核对，勿重新创建。

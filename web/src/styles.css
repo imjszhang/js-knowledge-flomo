@@ -341,3 +341,7 @@ summary::marker { color: #819180; font-size: 11px; }
 .material-exclusion { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 16px; font-size: 12px; }
 .material-exclusion input { min-width: 0; padding: 8px 10px; border: 1px solid #dce3dd; border-radius: 6px; }
 .material-exclusion small { color: #69766c; }
+
+.annotation-section { margin: 16px 0; padding: 16px 0; border-top: 1px solid #e1e6e1; }
+.annotation-composer textarea { display: block; width: 100%; min-height: 160px; padding: 14px; border: 1px solid #dce3dd; border-radius: 8px; resize: vertical; line-height: 1.8; }
+.annotation-record { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; font-size: 12px; color: #69766c; }

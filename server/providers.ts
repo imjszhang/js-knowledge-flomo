@@ -176,6 +176,11 @@ export function createFlomoProvider(options: FlomoProviderOptions = {}): FlomoPr
       possiblyLimited ||= all.length > limit;
       return { memos: all.slice(0, limit), limit, possiblyLimited, scope: 'remote-search' as const, checkedAt: new Date().toISOString() };
     }),
+    create: content => run(async call => {
+      const result = record(await call('memo_create', { content, format: 'markdown' }));
+      if (typeof result.id !== 'string' || !result.id) throw new ProviderError('创建结果缺少笔记 ID，请在 flomo 核对，勿重复提交。', 'CREATE_UNCONFIRMED');
+      return normalizeMemo({ ...result, content });
+    }),
     get: id => run(call => readFull(call, id)),
     tags: prefix => run(async call => normalizeTags(await call('tag_tree', { ...(prefix ? { prefix: cleanTag(prefix) } : {}), limit: 1000 }))),
     related: id => run(async call => memoRows(await call('memo_recommended', { id, limit: 20 })).map(normalizeMemo)),

@@ -84,7 +84,8 @@ export interface Change {
 export interface Job {
   id: string;
   workspaceId: string;
-  kind: 'ai' | 'publish';
+  kind: 'ai' | 'publish' | 'annotation';
+  resultMemo?: Memo;
   status: 'running' | 'succeeded' | 'failed' | 'uncertain';
   actor: Actor;
   text: string;

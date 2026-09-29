@@ -178,3 +178,15 @@ test('excluded tags combine with included tags', async () => {
   const result = await provider.search({tag:'待编', excludeTag:'概要'});
   assert.deepEqual(result.memos.map(item => item.id), ['keep']);
 });
+
+
+test('create sends markdown and preserves returned linked note identifiers', async () => {
+  const provider = createFlomoProvider({callTool:async (name,args) => {
+    assert.equal(name,'memo_create');
+    assert.equal(args.format,'markdown');
+    return {id:'new', linked_memos:['source'], url:'https://v.flomoapp.com/mine/?memo_id=new'};
+  }});
+  const result = await provider.create!('想法\n\nhttps://v.flomoapp.com/mine/?memo_id=source');
+  assert.equal(result.id,'new');
+  assert.deepEqual(result.linked_memos,['source']);
+});

@@ -655,6 +655,7 @@ function Workbench({ workspace, view, onView, aiConfigured, setGuard }: {
             <article className="source-document"><Markdown>{workspace.source.content}</Markdown>{workspace.source.content_truncated && <div className="notice">原文不完整，请检查接入状态后重新读取。</div>}</article>
           </section>
           <div className="supporting-tools">
+          <AnnotationComposer workspace={workspace} jobs={jobs.data ?? []} onDirty={(dirty) => trackInput("annotation", dirty)} onCreated={() => void jobs.refetch()}/>
           <div className="next-step"><button className="text-button" onClick={() => onView("materials")}><Layers3 size={15}/>查看相关材料<ArrowRight size={14}/></button>{selected.length > 0 && <span>已选 {selected.length} 条</span>}</div>
           {decisions.some((item) => item.answer) && <details className="quiet-disclosure"><summary>已作出的判断 <span>{decisions.filter((item) => item.answer).length}</span></summary>{decisions.filter((item) => item.answer).map((item) => <div key={item.id} className="answered-decision"><strong>{item.question}</strong><p>{item.answer}</p><span>{date(item.answeredAt ?? undefined, true)} · 已共享给 Codex</span></div>)}</details>}
           <details className="quiet-disclosure"><summary><MessageCircle size={15}/>讨论与补充<span>{workspace.messages.length || ""}</span></summary><ChatPanel onDirty={(dirty) => trackInput("chat", dirty)} workspace={latestWorkspace} aiConfigured={aiConfigured} flush={() => editor.session.flush()} onUpdate={update} onApply={(content, mode) => { if (mode === "append") editor.session.append(content); else editor.session.edit(content); setPreview(false); onView("draft"); }}/></details>
@@ -1140,7 +1141,7 @@ function JobList({
             ) : (
               <Circle size={10} />
             )}
-            <strong>{job.kind === "publish" ? "写回 flomo" : "AI 讨论"}</strong>
+            <strong>{job.kind === "publish" ? "写回 flomo" : job.kind === "annotation" ? "新建批注" : "AI 讨论"}</strong>
             <span>
               {
                 {
@@ -1156,7 +1157,8 @@ function JobList({
           {job.status === "running" && job.kind === "ai" && job.text && (
             <pre className="streaming-text">{job.text}</pre>
           )}
-          {job.status === "uncertain" && (
+          {job.resultMemo && <MemoLink memo={job.resultMemo}>打开批注笔记</MemoLink>}
+          {job.status === "uncertain" && job.kind === "publish" && (
             <>
               <p>请求结果不明确。先核实远端状态，避免重复写回。</p>
               <button
@@ -1177,6 +1179,32 @@ function JobList({
       ))}
     </div>
   );
+}
+
+function AnnotationComposer({ workspace, jobs, onDirty, onCreated }: {workspace:Workspace; jobs:Job[]; onDirty:(dirty:boolean)=>void; onCreated:()=>void}) {
+  const storageKey = `flomo-annotation:${workspace.id}`;
+  const [open, setOpen] = useState(false);
+  const [content, setContent] = useState(() => localStorage.getItem(storageKey) ?? "");
+  const [key, setKey] = useState(() => localStorage.getItem(`${storageKey}:request`) ?? crypto.randomUUID());
+  const [submitted, setSubmitted] = useState<Job | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const current = jobs.find(job => job.kind === "annotation" && job.idempotencyKey === key) ?? submitted;
+  const annotations = jobs.filter(job => job.kind === "annotation");
+  useEffect(() => { localStorage.setItem(storageKey, content); localStorage.setItem(`${storageKey}:request`, key); onDirty(!!content.trim() && !current); }, [content, key, current?.id]);
+  return <section className="annotation-section">
+    <button className="text-button" onClick={() => setOpen(!open)}><MessageCircle size={15}/>{open ? "收起批注" : "写批注"}</button>
+    {open && <div className="annotation-composer">
+      <p className="scope-notice">写下自己的想法，创建一条新的 flomo 笔记，并自动双链到当前原笔记。可在正文添加 #想法 等标签。</p>
+      <textarea aria-label="批注内容" value={content} disabled={busy || !!current} onChange={event => setContent(event.target.value)} placeholder="这条笔记让我想到……"/>
+      <p className="scope-notice">关联原笔记：<MemoLink memo={workspace.source}>{workspace.title}</MemoLink></p>
+      <ErrorBox error={error}/>
+      {!current && <button className="button primary" disabled={busy || !content.trim()} onClick={() => { setBusy(true); setError(""); void api.annotate(workspace.id, content, key).then(job => {setSubmitted(job); onCreated();}).catch(error => setError(messageOf(error))).finally(() => setBusy(false)); }}>{busy ? "正在提交…" : "创建批注笔记"}</button>}
+      {current && <p role="status">{current.status === "running" ? "正在创建批注…" : current.status === "succeeded" ? "已创建批注并关联原笔记" : current.error}</p>}
+      {current?.status === "succeeded" && <button className="text-button" onClick={() => {setContent(""); setKey(crypto.randomUUID()); setSubmitted(null);}}>再写一条批注</button>}
+    </div>}
+    {annotations.map(job => <div className="annotation-record" key={job.id}><span>{date(job.createdAt,true)} · {job.status === "succeeded" ? "已创建" : job.status === "running" ? "创建中" : "待核实"}</span>{job.resultMemo && <MemoLink memo={job.resultMemo}>打开批注笔记</MemoLink>}{job.error && <p>{job.error}</p>}</div>)}
+  </section>;
 }
 
 function MaterialDialog({

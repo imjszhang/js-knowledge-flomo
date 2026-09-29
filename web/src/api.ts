@@ -115,6 +115,8 @@ export const api = {
       baseVersion,
       idempotencyKey,
     }),
+  annotate: (id: string, content: string, idempotencyKey: string) =>
+    mutation<Job>(`/workspaces/${id}/annotations`, { content, idempotencyKey }),
   publish: (id: string, baseVersion: number, idempotencyKey: string) =>
     mutation<Job>(`/workspaces/${id}/publish`, { baseVersion, idempotencyKey }),
   jobs: (id: string) =>

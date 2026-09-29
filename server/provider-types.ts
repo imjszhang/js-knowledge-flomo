@@ -1,6 +1,7 @@
 import type { Memo, MemoSearch, SearchResult, TagResult, Workspace } from '../shared/contracts.js';
 
 export interface FlomoProvider {
+  create?(content: string): Promise<Memo>;
   search(params: MemoSearch): Promise<SearchResult>;
   /** Returns a complete memo, or fails rather than returning editable partial text. */
   get(id: string): Promise<Memo>;

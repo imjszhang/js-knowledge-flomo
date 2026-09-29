@@ -162,6 +162,7 @@ export class WorkbenchClient {
 
 const usage = `flomo workbench CLI (requires the local service)
 
+  annotation create ID --text TEXT --idempotency-key KEY
   memo list [--query TEXT] [--tag TAG] [--exclude-tag TAG] [--start-date DATE] [--end-date DATE] [--limit N]
   memo get ID | memo related ID
   tags list [--prefix TEXT]
@@ -210,6 +211,7 @@ const optionTypes: Record<string, { type: 'string' | 'boolean' }> = {
 };
 
 const commandOptions: Record<string, { flags: string[]; id?: boolean }> = {
+  'annotation create': { flags: ['file', 'stdin', 'text', 'idempotency-key'], id: true },
   'memo list': { flags: ['query', 'tag', 'exclude-tag', 'start-date', 'end-date', 'limit'] },
   'memo get': { flags: [], id: true }, 'memo related': { flags: [], id: true }, 'tags list': { flags: ['prefix'] },
   'workspace list': { flags: [] }, 'workspace create': { flags: ['memo', 'title'] },
@@ -232,7 +234,7 @@ const commandOptions: Record<string, { flags: string[]; id?: boolean }> = {
   'changes list': { flags: ['after'] }, 'changes watch': { flags: ['after'] },
   'settings get': { flags: [] }, 'settings set': { flags: ['file'] }, 'service status': { flags: [] },
 };
-for (const command of ['workspace refresh', 'workspace rebase', 'workspace goal', 'draft update', 'draft publish', 'material set', 'material propose', 'material decide', 'decision add', 'decision answer', 'message add', 'ai run']) {
+for (const command of ['annotation create', 'workspace refresh', 'workspace rebase', 'workspace goal', 'draft update', 'draft publish', 'material set', 'material propose', 'material decide', 'decision add', 'decision answer', 'message add', 'ai run']) {
   commandOptions[command]!.flags.push('context-revision');
 }
 
@@ -311,6 +313,7 @@ export async function runCli(args: string[], io: CliIO = defaultIO, suppliedClie
         result = await client.request('PUT', '/context', parsed.data);
         break;
       }
+      case 'annotation create': result = await workspaceRequest('POST', '/annotations', { content: await content(), idempotencyKey: string('idempotency-key', true) }); break;
       case 'draft update': result = await workspaceRequest('PATCH', '/draft', { draft: await content(), baseVersion: integer('base-version'), summary: string('summary') }); break;
       case 'draft diff': result = await client.diff(id!); break;
       case 'draft history': result = await workspaceRequest('GET', '/revisions'); break;

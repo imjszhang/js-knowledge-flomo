@@ -29,6 +29,7 @@ export function createWorkbenchMcpServer(client = new WorkbenchClient(undefined,
   tool('workbench_memo_list', 'Search remote flomo notes. Results may be limited and are not a complete local knowledge base.', {
     query: z.string().optional(), tag: z.string().optional(), excludeTag: z.string().optional(), startDate: z.string().optional(), endDate: z.string().optional(), limit: z.number().int().positive().optional(),
   }, ({ query, ...rest }) => client.request('GET', '/memos', undefined, { q: query, ...rest }));
+  tool('workbench_annotation_create', 'Create a new flomo annotation linked to the workspace source. Writes a new remote note; use user-authored or approved content. Reuse idempotencyKey on retries.', { ...workspaceMutation, content:z.string().trim().min(1).max(20000), idempotencyKey:z.string().min(1).max(200) }, ({id,...body}) => mutateWorkspace('POST', id, '/annotations', body));
   tool('workbench_memo_get', 'Fetch the complete current flomo memo before working with it.', { id }, ({ id }) => client.request('GET', `/memos/${encodeURIComponent(id)}`));
   tool('workbench_memo_related', 'Find related flomo notes to consider as source materials. Inspect full notes before using them.', { id }, ({ id }) => client.request('GET', `/memos/${encodeURIComponent(id)}/related`));
   tool('workbench_tags_list', 'Read visible flomo tags, including truncation metadata.', { prefix: z.string().optional() }, params => client.request('GET', '/tags', undefined, params));

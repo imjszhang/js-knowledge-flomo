@@ -120,6 +120,11 @@ export async function createApp({ service, webRoot, flomoConfigured, periodicRef
     const body = publishSchema.parse(request.body); reply.code(202);
     return service.publish(idOf(request), body.baseVersion, body.idempotencyKey, actor(request));
   });
+  app.post(`${root}/workspaces/:id/annotations`, async (request, reply) => {
+    const body = z.object({content:z.string().trim().min(1).max(20000), idempotencyKey:z.string().min(1).max(200)}).strict().parse(request.body);
+    reply.code(202);
+    return service.annotate(idOf(request), body.content, body.idempotencyKey, actor(request));
+  });
   app.get(`${root}/jobs`, request => store.listJobs(z.object({workspaceId:z.string().optional()}).parse(request.query).workspaceId));
   app.get(`${root}/jobs/:id`, request => store.getJob(idOf(request)));
   app.post(`${root}/jobs/:id/reconcile`, request => service.reconcile(idOf(request)));
