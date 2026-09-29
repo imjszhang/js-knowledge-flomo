@@ -337,3 +337,7 @@ summary::marker { color: #819180; font-size: 11px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+.material-exclusion { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 16px; font-size: 12px; }
+.material-exclusion input { min-width: 0; padding: 8px 10px; border: 1px solid #dce3dd; border-radius: 6px; }
+.material-exclusion small { color: #69766c; }

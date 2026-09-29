@@ -1192,20 +1192,22 @@ function MaterialDialog({
 }) {
   const [query, setQuery] = useState("");
   const [tag, setTag] = useState("");
+  const [excludeTag, setExcludeTag] = useState("");
+  const excluded = useDebounce(excludeTag.trim().replace(/^#/, ""));
   const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   const [checked, setChecked] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const search = useDebounce(query);
-  const isRelated = !search.trim() && !tag;
+  const isRelated = !search.trim() && !tag && !excluded;
   const memos = useQuery({
-    queryKey: ["material-search", sourceId, search, tag],
+    queryKey: ["material-search", sourceId, search, tag, excluded],
     queryFn: () =>
       isRelated
         ? api
             .related(sourceId)
             .then((memos) => ({ memos, limit: 30, possiblyLimited: false }))
-        : api.memos({ q: search, tag, limit: "30" }),
+        : api.memos({ q: search, tag, excludeTag: excluded, limit: "30" }),
   });
   return (
     <Modal title="为这次思考找一些材料" wide onClose={onClose}>
@@ -1230,6 +1232,12 @@ function MaterialDialog({
           ))}
         </select>
       </div>
+      <label className="material-exclusion">
+        <span>不包含标签</span>
+        <input aria-label="排除材料标签" list="material-excluded-tags" value={excludeTag} onChange={(event) => { setExcludeTag(event.target.value); setChecked([]); }} placeholder="输入标签，如：概要" />
+        <datalist id="material-excluded-tags">{(settings.data?.pinnedTags ?? pinnedTags).map(item => <option key={item} value={item} />)}</datalist>
+        <small>同时排除该标签的子标签；留空则不排除。</small>
+      </label>
       <ErrorBox
         error={error || memos.error}
         retry={memos.isError ? () => void memos.refetch() : undefined}
@@ -1243,7 +1251,7 @@ function MaterialDialog({
         {memos.isPending ? (
           <Loading />
         ) : memos.data?.memos.length === 0 ? (
-          <div className="empty-state">没有找到相关材料</div>
+          <div className="empty-state">本次返回结果中没有符合条件的材料，可调整筛选后重试。</div>
         ) : (
           memos.data?.memos.map((memo) => {
             const already = selected.includes(memo.id) || memo.id === sourceId;
@@ -1288,7 +1296,7 @@ function MaterialDialog({
       </div>
       {memos.data?.possiblyLimited && (
         <div className="scope-notice">
-          仅展示本次搜索的前 {memos.data.limit} 条结果，可缩小关键词范围。
+          {excluded ? "已从本次返回的候选中排除指定标签，可能还有未返回的匹配笔记。可添加关键词或包含标签缩小范围。" : `仅展示本次搜索的前 ${memos.data.limit} 条结果，可缩小关键词范围。`}
         </div>
       )}
       <div className="modal-actions">

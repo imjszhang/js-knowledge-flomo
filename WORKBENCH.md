@@ -242,3 +242,5 @@ npm run --silent workbench -- job get JOB_ID --json
 错误以 `{"error":{"code":"...","message":"...","details":{}}}` 写入 stderr，失败时不向 stdout 混入日志。`--help` 输出命令说明。
 
 服务默认用于本机受信任的 Web 和 Agent。直接把端口暴露到公网前需要单独设计身份验证和访问控制。
+
+材料查找支持“不包含标签”，排除该标签及其子标签，并可与关键词、包含标签组合。CLI 使用 `memo list --exclude-tag 概要`，MCP 使用 `workbench_memo_list` 的 `excludeTag`。排除在远端返回的有限候选中执行，结果可能不完整。

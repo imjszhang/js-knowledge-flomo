@@ -145,7 +145,9 @@ export function createFlomoProvider(options: FlomoProviderOptions = {}): FlomoPr
   return {
     search: (params: MemoSearch) => run(async call => {
       const limit = Number.isFinite(params.limit) ? Math.max(1, Math.min(50, Math.floor(params.limit!))) : 50;
-      const args: Record<string, unknown> = { limit };
+      const excludeTag = params.excludeTag ? cleanTag(params.excludeTag.trim()) : '';
+      const fetchLimit = excludeTag ? 50 : limit;
+      const args: Record<string, unknown> = { limit: fetchLimit };
       if (params.query?.trim()) args.keywords = params.query.trim();
       if (params.startDate) args.start_date = params.startDate;
       if (params.endDate) args.end_date = params.endDate;
@@ -164,8 +166,9 @@ export function createFlomoProvider(options: FlomoProviderOptions = {}): FlomoPr
       for (const searchTag of tags) {
         const result = await call('memo_search', { ...args, ...(searchTag ? { tag: searchTag } : {}) });
         const rows = memoRows(result).map(normalizeMemo);
-        possiblyLimited ||= rows.length >= limit || record(result).truncated === true;
+        possiblyLimited ||= rows.length >= fetchLimit || record(result).truncated === true;
         for (const memo of rows) {
+          if (excludeTag && memo.tags.some(item => item === excludeTag || item.startsWith(`${excludeTag}/`))) continue;
           if (!tag || memo.tags.some(item => item === tag || item.startsWith(`${tag}/`))) memos.set(memo.id, memo);
         }
       }

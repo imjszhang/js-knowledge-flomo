@@ -162,3 +162,19 @@ test('AI streaming awaits chunk persistence and honors cancellation', async () =
   controller.abort();
   await assert.rejects(provider.generate(workspace(), '继续', () => assert.fail('cancelled chunk'), controller.signal), { name: 'AbortError' });
 });
+
+test('excluded tags remove exact and descendant matches but retain prefix collisions and report capped scope', async () => {
+  const provider = createFlomoProvider({ callTool: async (_name, args) => {
+    assert.equal(args.limit, 50);
+    return { memos: [memo('exact', {tags:['概要']}), memo('child', {tags:['概要/视频']}), memo('keep', {tags:['概要集']}), memo('untagged', {tags:[]})], truncated: true };
+  } });
+  const result = await provider.search({ excludeTag: '#概要', limit: 30 });
+  assert.deepEqual(result.memos.map(item => item.id).sort(), ['keep', 'untagged']);
+  assert.equal(result.possiblyLimited, true);
+});
+
+test('excluded tags combine with included tags', async () => {
+  const provider = createFlomoProvider({ callTool: async name => name === 'tag_tree' ? {tags:[]} : {memos:[memo('keep'), memo('remove', {tags:['待编','概要/视频']})]} });
+  const result = await provider.search({tag:'待编', excludeTag:'概要'});
+  assert.deepEqual(result.memos.map(item => item.id), ['keep']);
+});

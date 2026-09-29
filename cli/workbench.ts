@@ -162,7 +162,7 @@ export class WorkbenchClient {
 
 const usage = `flomo workbench CLI (requires the local service)
 
-  memo list [--query TEXT] [--tag TAG] [--start-date DATE] [--end-date DATE] [--limit N]
+  memo list [--query TEXT] [--tag TAG] [--exclude-tag TAG] [--start-date DATE] [--end-date DATE] [--limit N]
   memo get ID | memo related ID
   tags list [--prefix TEXT]
   workspace list
@@ -210,7 +210,7 @@ const optionTypes: Record<string, { type: 'string' | 'boolean' }> = {
 };
 
 const commandOptions: Record<string, { flags: string[]; id?: boolean }> = {
-  'memo list': { flags: ['query', 'tag', 'start-date', 'end-date', 'limit'] },
+  'memo list': { flags: ['query', 'tag', 'exclude-tag', 'start-date', 'end-date', 'limit'] },
   'memo get': { flags: [], id: true }, 'memo related': { flags: [], id: true }, 'tags list': { flags: ['prefix'] },
   'workspace list': { flags: [] }, 'workspace create': { flags: ['memo', 'title'] },
   'workspace get': { flags: [], id: true }, 'workspace refresh': { flags: [], id: true },
@@ -292,7 +292,7 @@ export async function runCli(args: string[], io: CliIO = defaultIO, suppliedClie
     };
     let result: unknown;
     switch (command) {
-      case 'memo list': result = await client.request('GET', '/memos', undefined, { q: string('query'), tag: string('tag'), startDate: string('start-date'), endDate: string('end-date'), limit: values.limit === undefined ? undefined : integer('limit') }); break;
+      case 'memo list': result = await client.request('GET', '/memos', undefined, { q: string('query'), tag: string('tag'), excludeTag: string('exclude-tag'), startDate: string('start-date'), endDate: string('end-date'), limit: values.limit === undefined ? undefined : integer('limit') }); break;
       case 'memo get': result = await client.request('GET', `/memos/${encodeURIComponent(id!)}`); break;
       case 'memo related': result = await client.request('GET', `/memos/${encodeURIComponent(id!)}/related`); break;
       case 'tags list': result = await client.request('GET', '/tags', undefined, { prefix: string('prefix') }); break;

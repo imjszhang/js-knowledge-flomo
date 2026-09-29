@@ -27,7 +27,7 @@ export function createWorkbenchMcpServer(client = new WorkbenchClient(undefined,
 
   tool('workbench_status', 'Check the running local workbench service. The Node service must be started separately.', {}, () => client.request('GET', '/health'));
   tool('workbench_memo_list', 'Search remote flomo notes. Results may be limited and are not a complete local knowledge base.', {
-    query: z.string().optional(), tag: z.string().optional(), startDate: z.string().optional(), endDate: z.string().optional(), limit: z.number().int().positive().optional(),
+    query: z.string().optional(), tag: z.string().optional(), excludeTag: z.string().optional(), startDate: z.string().optional(), endDate: z.string().optional(), limit: z.number().int().positive().optional(),
   }, ({ query, ...rest }) => client.request('GET', '/memos', undefined, { q: query, ...rest }));
   tool('workbench_memo_get', 'Fetch the complete current flomo memo before working with it.', { id }, ({ id }) => client.request('GET', `/memos/${encodeURIComponent(id)}`));
   tool('workbench_memo_related', 'Find related flomo notes to consider as source materials. Inspect full notes before using them.', { id }, ({ id }) => client.request('GET', `/memos/${encodeURIComponent(id)}/related`));
