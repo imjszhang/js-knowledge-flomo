@@ -60,9 +60,9 @@ export async function createApp({ service, webRoot, flomoConfigured, periodicRef
   app.get(`${root}/context`, () => store.getContext());
   app.put(`${root}/context`, request => store.setContext(contextSchema.parse(request.body),actor(request)));
   app.get(`${root}/memos`, request => {
-    const query = z.object({q:z.string().max(1000).optional(), tag:z.string().max(200).optional(), excludeTag:z.string().max(200).optional(),
+    const query = z.object({q:z.string().max(1000).optional(), tag:z.string().max(200).optional(), excludeTag:z.string().max(200).optional(), unlinkedOnly:z.enum(['true','false']).optional(),
       startDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), limit:z.coerce.number().int().min(1).max(50).default(30)}).parse(request.query);
-    return flomo.search({query:query.q, tag:query.tag, excludeTag:query.excludeTag, startDate:query.startDate, endDate:query.endDate, limit:query.limit});
+    return flomo.search({query:query.q, tag:query.tag, excludeTag:query.excludeTag, unlinkedOnly:query.unlinkedOnly === 'true', startDate:query.startDate, endDate:query.endDate, limit:query.limit});
   });
   app.get(`${root}/memos/:id`, request => flomo.get(idOf(request)));
   app.get(`${root}/memos/:id/related`, request => flomo.related(idOf(request)));

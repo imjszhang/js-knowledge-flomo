@@ -190,3 +190,14 @@ test('create sends markdown and preserves returned linked note identifiers', asy
   assert.equal(result.id,'new');
   assert.deepEqual(result.linked_memos,['source']);
 });
+
+
+test('unlinked filter uses memo relationships, retains external links and truncated unlinked content', async () => {
+  const provider = createFlomoProvider({callTool:async () => ({memos:[
+    memo('external',{content:'https://example.com',linked_memos:[]}),
+    memo('linked',{linked_memos:['other']}),
+    memo('truncated',{content_truncated:true,linked_memos:[]}),
+  ]})});
+  assert.deepEqual((await provider.search({unlinkedOnly:true})).memos.map(m=>m.id).sort(),['external','truncated']);
+  assert.equal((await provider.search({unlinkedOnly:false})).memos.length,3);
+});

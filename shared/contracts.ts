@@ -97,6 +97,7 @@ export interface Job {
   targetContent?: string;
 }
 export interface MemoSearch {
+  unlinkedOnly?: boolean;
   excludeTag?: string;
   query?: string;
   tag?: string;

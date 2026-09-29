@@ -146,7 +146,7 @@ export function createFlomoProvider(options: FlomoProviderOptions = {}): FlomoPr
     search: (params: MemoSearch) => run(async call => {
       const limit = Number.isFinite(params.limit) ? Math.max(1, Math.min(50, Math.floor(params.limit!))) : 50;
       const excludeTag = params.excludeTag ? cleanTag(params.excludeTag.trim()) : '';
-      const fetchLimit = excludeTag ? 50 : limit;
+      const fetchLimit = excludeTag || params.unlinkedOnly ? 50 : limit;
       const args: Record<string, unknown> = { limit: fetchLimit };
       if (params.query?.trim()) args.keywords = params.query.trim();
       if (params.startDate) args.start_date = params.startDate;
@@ -168,6 +168,7 @@ export function createFlomoProvider(options: FlomoProviderOptions = {}): FlomoPr
         const rows = memoRows(result).map(normalizeMemo);
         possiblyLimited ||= rows.length >= fetchLimit || record(result).truncated === true;
         for (const memo of rows) {
+          if (params.unlinkedOnly && memo.linked_memos.length > 0) continue;
           if (excludeTag && memo.tags.some(item => item === excludeTag || item.startsWith(`${excludeTag}/`))) continue;
           if (!tag || memo.tags.some(item => item === tag || item.startsWith(`${tag}/`))) memos.set(memo.id, memo);
         }

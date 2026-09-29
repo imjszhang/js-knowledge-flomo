@@ -349,6 +349,7 @@ function Library({
   flomoConfigured?: boolean;
 }) {
   const [search, setSearch] = useState("");
+  const [unlinkedOnly, setUnlinkedOnly] = useState(false);
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [opening, setOpening] = useState<string | null>(null);
@@ -356,9 +357,9 @@ function Library({
   const query = useDebounce(search);
   const invalidRange = !!startDate && !!endDate && startDate > endDate;
   const memos = useQuery({
-    queryKey: ["memos", tag, query, startDate, endDate],
+    queryKey: ["memos", tag, query, startDate, endDate, unlinkedOnly],
     queryFn: () =>
-      api.memos({ q: query, tag, startDate, endDate, limit: "50" }),
+      api.memos({ q: query, tag, startDate, endDate, unlinkedOnly: String(unlinkedOnly), limit: "50" }),
     enabled: !invalidRange,
   });
   return (
@@ -424,6 +425,7 @@ function Library({
           )}
         </div>
       </div>
+      <label className="unlinked-filter"><input type="checkbox" checked={unlinkedOnly} onChange={event => setUnlinkedOnly(event.target.checked)}/>只看尚未双链的笔记<span>外部网页链接不算</span></label>
       {flomoConfigured === false && (
         <div className="notice">
           请先在项目环境中配置 flomo 接入。已有工作区和本地草稿仍可打开。
@@ -461,7 +463,7 @@ function Library({
             {memos.data.memos.length === 0 ? (
               <div className="empty-state">
                 <BookOpen size={30} />
-                <h3>还没有找到相关笔记</h3>
+                <h3>{unlinkedOnly ? "本次返回结果中没有尚未双链的笔记" : "还没有找到相关笔记"}</h3>
                 <p>换一个关键词，或试着扩大日期范围。</p>
               </div>
             ) : (
