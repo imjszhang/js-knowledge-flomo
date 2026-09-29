@@ -1192,6 +1192,7 @@ function MaterialDialog({
 }) {
   const [query, setQuery] = useState("");
   const [tag, setTag] = useState("");
+  const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   const [checked, setChecked] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -1224,7 +1225,7 @@ function MaterialDialog({
           onChange={(event) => setTag(event.target.value)}
         >
           <option value="">全部标签</option>
-          {pinnedTags.map((item) => (
+          {(settings.data?.pinnedTags ?? pinnedTags).map((item) => (
             <option key={item}>{item}</option>
           ))}
         </select>

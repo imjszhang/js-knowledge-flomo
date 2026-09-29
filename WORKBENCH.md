@@ -161,7 +161,7 @@ npm run --silent workbench -- changes watch --after LAST_CHANGE_ID --json
 
 flomo 侧提供按需搜索、笔记全文读取和已打开工作区来源检查。**搜索结果和本地缓存不代表完整知识库**：搜索结果中的 `possiblyLimited`、标签结果中的 `truncated` 和工作区中的 `lastCheckedAt` 用于说明范围与新鲜程度。当前没有承诺全库增量镜像、删除同步或 flomo 实时推送。`refreshSeconds: 0` 关闭定期检查，其他可用值为 30～3600 秒。
 
-置顶标签默认依次为「待编、概要、想法、摘要、资源」。查看、设置共享配置：
+置顶标签默认依次为「待编、概要、想法、资源」。查看、设置共享配置：
 
 ```bash
 npm run --silent workbench -- settings get --json
@@ -171,7 +171,7 @@ npm run --silent workbench -- settings set --file settings.json --json
 `settings.json` 的完整结构：
 
 ```json
-{"pinnedTags":["待编","概要","想法","摘要","资源"],"refreshSeconds":60}
+{"pinnedTags":["待编","概要","想法","资源"],"refreshSeconds":60}
 ```
 
 配置只影响工作台导航和检查间隔，不修改 flomo 标签。

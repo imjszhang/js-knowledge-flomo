@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const pinnedTags = ['待编', '概要', '想法', '摘要', '资源'] as const;
+export const pinnedTags = ['待编', '概要', '想法', '资源'] as const;
 export type Actor = 'web' | 'cli' | 'mcp';
 export interface Memo {
   id: string;
