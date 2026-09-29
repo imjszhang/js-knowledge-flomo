@@ -63,6 +63,62 @@ export interface Decision {
   createdAt: string;
   answeredAt: string | null;
 }
+export type AnalysisKind = 'insights' | 'evolution' | 'connections' | 'outline' | 'cards';
+export interface AnalysisSource {
+  key: string;
+  kind: 'flomo' | 'collector';
+  id: string;
+  url: string;
+  title: string;
+  content: string;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+export interface AnalysisCardInput {
+  title: string;
+  body: string;
+  tags: string[];
+  sourceKeys: string[];
+}
+export interface AnalysisCard extends AnalysisCardInput {
+  id: string;
+  status: 'draft' | 'publishing' | 'published' | 'uncertain' | 'failed';
+  resultMemo?: Memo;
+  error?: string;
+  reviewedAt?: string;
+  publicationKey?: string;
+  publicationHash?: string;
+  publicationActor?: Actor;
+}
+export interface AnalysisRecord {
+  id: string;
+  kind: AnalysisKind;
+  engine: 'builtin' | 'external';
+  question: string;
+  basisAnalysisId?: string;
+  status: 'prepared' | 'running' | 'succeeded' | 'failed';
+  workspaceVersion: number;
+  inputFingerprint: string;
+  goal: string;
+  sources: AnalysisSource[];
+  instructions: string;
+  output: string;
+  cards: AnalysisCard[];
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+  actor: Actor;
+  idempotencyKey: string;
+  requestHash: string;
+}
+export interface DiscoveryResult {
+  workspace: Workspace;
+  terms: string[];
+  possiblyLimited: boolean;
+  readCount: number;
+  omitted: { memoId: string; reason: string }[];
+}
 export type WorkbenchView = 'note' | 'materials' | 'draft';
 export interface ActiveContext {
   workspaceId: string | null;
@@ -100,6 +156,7 @@ export interface Workspace {
   goal?: string;
   materialCandidates?: MaterialCandidate[];
   decisions?: Decision[];
+  analyses?: AnalysisRecord[];
 }
 export interface Change {
   id: number;
@@ -167,3 +224,19 @@ export const candidatesSchema = z.object({ items:z.array(z.object({ memoId:z.str
 export const candidateChoiceSchema = z.object({ status:z.enum(['selected','dismissed','proposed']), baseVersion:versionSchema }).strict();
 export const decisionSchema = z.object({ question:z.string().min(1).max(2000), options:z.array(z.string().min(1).max(1000)).max(6).default([]), baseVersion:versionSchema }).strict();
 export const decisionAnswerSchema = z.object({ answer:z.string().min(1).max(5000), baseVersion:versionSchema }).strict();
+export const analysisKindSchema = z.enum(['insights','evolution','connections','outline','cards']);
+export const discoverySchema = z.object({
+  terms:z.array(z.string().trim().min(1).max(100)).min(1).max(6), tag:z.string().max(200).optional(), excludeTag:z.string().max(200).optional(),
+  startDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  limit:z.number().int().min(1).max(30).default(20), baseVersion:versionSchema,
+}).strict();
+export const analysisCreateSchema = z.object({kind:analysisKindSchema, question:z.string().trim().max(5000).default(''),
+  engine:z.enum(['builtin','external']), basisAnalysisId:z.string().min(1).optional(), baseVersion:versionSchema,
+  idempotencyKey:z.string().min(1).max(200),
+}).strict();
+export const analysisCardInputSchema = z.object({title:z.string().trim().min(1).max(200),body:z.string().trim().min(1).max(15000),
+  tags:z.array(z.string().regex(/^[^\s#<>]+$/).max(100)).max(10),sourceKeys:z.array(z.string().min(1)).min(1).max(31),
+}).strict();
+export const analysisResultSchema = z.object({text:z.string().trim().min(1).max(100000),cards:z.array(analysisCardInputSchema).max(12).optional(),baseVersion:versionSchema}).strict();
+export const analysisCardUpdateSchema = analysisCardInputSchema.extend({baseVersion:versionSchema}).strict();
+export const analysisCardPublishSchema = z.object({baseVersion:versionSchema,idempotencyKey:z.string().min(1).max(200)}).strict();

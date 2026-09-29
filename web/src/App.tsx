@@ -5,7 +5,6 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
-import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
 import {
@@ -38,6 +37,9 @@ import { pinnedTags } from "../../shared/contracts";
 import { api, messageOf, sourceUrl } from "./api";
 import { useChanges, useDebounce, useDraft } from "./hooks";
 import InlineDiff from "./InlineDiff";
+import Modal from "./Modal";
+import { AnalysisPanel } from "./AnalysisPanel";
+import { TopicDiscovery } from "./TopicDiscovery";
 import { CollectorMaterialCard, CollectorSources } from "./CollectorSources";
 
 type LeaveGuard = () => Promise<unknown>;
@@ -134,92 +136,6 @@ function MemoLink({
   ) : null;
 }
 
-function Modal({
-  title,
-  children,
-  onClose,
-  wide = false,
-  drawer = false,
-}: {
-  title: string;
-  children: ReactNode;
-  onClose: () => void;
-  wide?: boolean;
-  drawer?: boolean;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  const close = useRef(onClose);
-  close.current = onClose;
-  useEffect(() => {
-    const previous = document.activeElement as HTMLElement | null;
-    const oldOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    ref.current?.focus();
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") close.current();
-      if (event.key === "Tab") {
-        const elements = Array.from(
-          ref.current?.querySelectorAll<HTMLElement>(
-            'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex="0"]',
-          ) ?? [],
-        );
-        if (!elements.length) {
-          event.preventDefault();
-          return;
-        }
-        const first = elements[0];
-        const last = elements[elements.length - 1];
-        if (
-          event.shiftKey &&
-          (document.activeElement === first ||
-            document.activeElement === ref.current)
-        ) {
-          event.preventDefault();
-          last.focus();
-        } else if (
-          !event.shiftKey &&
-          (document.activeElement === last ||
-            document.activeElement === ref.current)
-        ) {
-          event.preventDefault();
-          first.focus();
-        }
-      }
-    };
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.body.style.overflow = oldOverflow;
-      document.removeEventListener("keydown", handleKey);
-      previous?.focus();
-    };
-  }, []);
-  return createPortal(
-    <div
-      className={`modal-backdrop ${drawer ? "drawer-backdrop" : ""}`}
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <div
-        className={`modal ${wide ? "wide" : ""} ${drawer ? "drawer-panel" : ""}`}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        tabIndex={-1}
-        ref={ref}
-      >
-        <div className="modal-header">
-          <h2>{title}</h2>
-          <button className="icon-button" aria-label="关闭" onClick={onClose}>
-            <X size={19} />
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>,
-    document.body,
-  );
-}
 
 function useSavedFilter<T extends string | boolean>(name: string, fallback: T) {
   const key = `flomo:filters:${name}`;
@@ -598,7 +514,7 @@ function Workbench({ workspace, view, onView, aiConfigured, collectorConfigured,
   useEffect(() => {
     setGuard(async () => {
       if (goalDirty.current) throw new Error("本次目标尚未保存，请先保存或取消编辑。");
-      if (unsavedInputs.current.size) throw new Error("还有未保存的判断或补充思考，请先保存或清空输入再切换笔记。");
+      if (unsavedInputs.current.size) throw new Error("还有未保存的输入，请先保存或清空后再切换笔记。");
       if (editor.session.dirty) await editor.session.flush();
     });
     return () => setGuard(null);
@@ -695,10 +611,12 @@ function Workbench({ workspace, view, onView, aiConfigured, collectorConfigured,
           <AnnotationComposer workspace={workspace} jobs={jobs.data ?? []} onDirty={(dirty) => trackInput("annotation", dirty)} onCreated={() => void jobs.refetch()}/>
           <div className="next-step"><button className="text-button" onClick={() => onView("materials")}><Layers3 size={15}/>查看相关材料<ArrowRight size={14}/></button>{selectedCount > 0 && <span>已选 {selectedCount} 条</span>}</div>
           {decisions.some((item) => item.answer) && <details className="quiet-disclosure"><summary>已作出的判断 <span>{decisions.filter((item) => item.answer).length}</span></summary>{decisions.filter((item) => item.answer).map((item) => <div key={item.id} className="answered-decision"><strong>{item.question}</strong><p>{item.answer}</p><span>{date(item.answeredAt ?? undefined, true)} · 已共享给 Codex</span></div>)}</details>}
+          <AnalysisPanel workspace={latestWorkspace} aiConfigured={aiConfigured} disabled={!!busy || !!editor.review || !!editor.conflict} flush={() => { if (goalDirty.current) throw new Error("本次目标尚未保存，请先保存或取消编辑后再分析。"); return editor.session.flush(); }} onUpdate={update} onDirty={(dirty) => trackInput("analysis", dirty)} renderContent={(content) => <Markdown>{content}</Markdown>} onApply={(content, mode) => { if (mode === "append") editor.session.append(content); else editor.session.edit(content); setPreview(false); onView("draft"); }}/>
           <details className="quiet-disclosure"><summary><MessageCircle size={15}/>讨论与补充<span>{workspace.messages.length || ""}</span></summary><ChatPanel onDirty={(dirty) => trackInput("chat", dirty)} workspace={latestWorkspace} aiConfigured={aiConfigured} flush={() => editor.session.flush()} onUpdate={update} onApply={(content, mode) => { if (mode === "append") editor.session.append(content); else editor.session.edit(content); setPreview(false); onView("draft"); }}/></details>
           </div>
         </div>
         <div className="materials-view" hidden={view !== "materials"}><div className="section-heading"><h2>本次加工的材料</h2><button className="button secondary small" onClick={() => setMaterialSearch(true)}><Search size={14}/>查找</button></div><p className="section-description">你选用的内容会成为共享上下文。展开原文核对，再决定是否采用。</p>
+          <TopicDiscovery workspace={latestWorkspace} disabled={!!busy || !!editor.review || !!editor.conflict} flush={() => editor.session.flush()} onUpdate={update} onDirty={(dirty) => trackInput("discovery", dirty)}/>
           {proposed.length > 0 && <section className="candidate-section"><div className="material-group-label"><span>待你选择</span><span>{proposed.length} 条推荐</span></div>{proposed.map((item) => materialCard(item.memo, item))}</section>}
           <section><div className="material-group-label"><span>已选用</span><span>{selectedCount} 条</span></div>{selectedCount ? <>{selected.map((memo) => materialCard(memo, candidates.find((item) => item.memo.id === memo.id)))}{collectorMaterials.map((material) => <CollectorMaterialCard key={material.article.id} material={material} disabled={!!busy} configured={collectorConfigured} onRefresh={attachSource} onRemove={removeSource} renderContent={(content) => <Markdown>{content}</Markdown>}/>)}</> : <div className="empty-state small-empty"><Layers3 size={25}/><h3>先给这次思考找些依据</h3><p>在 Codex 中说“为当前笔记找材料，注明推荐理由”，也可以自己查找。</p><button className="text-button" onClick={() => setMaterialSearch(true)}>查找相关笔记<ArrowRight size={14}/></button></div>}</section>
           {sourceAssociations("all")}
