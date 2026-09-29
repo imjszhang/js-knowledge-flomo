@@ -220,6 +220,20 @@ function Modal({
   );
 }
 
+function useSavedFilter<T extends string | boolean>(name: string, fallback: T) {
+  const key = `flomo:filters:${name}`;
+  const [value, setValue] = useState<T>(() => {
+    try {
+      const saved: unknown = JSON.parse(localStorage.getItem(key) ?? "null");
+      return typeof saved === typeof fallback ? saved as T : fallback;
+    } catch { return fallback; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* Storage may be unavailable. */ }
+  }, [key, value]);
+  return [value, setValue] as const;
+}
+
 export function App() {
   const client = useQueryClient();
   const health = useQuery({ queryKey: ["health"], queryFn: api.health });
@@ -230,7 +244,7 @@ export function App() {
   const [workspaceId, setWorkspaceId] = useState<string | null>(initialId.current);
   const [view, setView] = useState<WorkbenchView>("note");
   const [ready, setReady] = useState(false);
-  const [tag, setTag] = useState<string>("待编");
+  const [tag, setTag] = useSavedFilter<string>("library.tag", "待编");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [librarySection, setLibrarySection] = useState<"notes" | "workspaces">("notes");
@@ -348,10 +362,10 @@ function Library({
   onOpen: (memo: Memo) => Promise<void>;
   flomoConfigured?: boolean;
 }) {
-  const [search, setSearch] = useState("");
-  const [unlinkedOnly, setUnlinkedOnly] = useState(false);
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
+  const [search, setSearch] = useSavedFilter<string>("library.search", "");
+  const [unlinkedOnly, setUnlinkedOnly] = useSavedFilter<boolean>("library.unlinkedOnly", false);
+  const [startDate, setStartDate] = useSavedFilter<string>("library.startDate", "");
+  const [endDate, setEndDate] = useSavedFilter<string>("library.endDate", "");
   const [opening, setOpening] = useState<string | null>(null);
   const [error, setError] = useState("");
   const query = useDebounce(search);
@@ -1220,9 +1234,9 @@ function MaterialDialog({
   onAdd: (ids: string[]) => Promise<void>;
   onClose: () => void;
 }) {
-  const [query, setQuery] = useState("");
-  const [tag, setTag] = useState("");
-  const [excludeTag, setExcludeTag] = useState("");
+  const [query, setQuery] = useSavedFilter<string>("materials.query", "");
+  const [tag, setTag] = useSavedFilter<string>("materials.tag", "");
+  const [excludeTag, setExcludeTag] = useSavedFilter<string>("materials.excludeTag", "");
   const excluded = useDebounce(excludeTag.trim().replace(/^#/, ""));
   const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
   const [checked, setChecked] = useState<string[]>([]);
