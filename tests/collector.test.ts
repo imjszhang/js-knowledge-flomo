@@ -233,3 +233,37 @@ test('plain extraction handles surrounding punctuation and excludes flomo and no
     'https://flomoapp.com.example.org/valid',
   ]);
 });
+
+test('flomo Markdown exports restore escaped punctuation in bare source URLs without changing their query identity', () => {
+  assert.deepEqual(extractSourceUrls([
+    String.raw`\- 原文链接：https://www.zhihu.com/question/2078550836104394358/answer/2087601635543495695?share\_code=p9oOzR7JMXOw&utm\_psn=2088411714484290935`,
+    String.raw`https://example.com/a\(b\)?under\_score=1\&encoded=%5C%5f%2b\#part\_one`,
+    String.raw`https://example.com/quotes?x=\'quoted\'\&y=\"double\"\&z=\!`,
+  ].join('\n')), [
+    'https://www.zhihu.com/question/2078550836104394358/answer/2087601635543495695?share_code=p9oOzR7JMXOw&utm_psn=2088411714484290935',
+    'https://example.com/a(b)?under_score=1&encoded=%5C%5f%2b#part_one',
+    'https://example.com/quotes?x=\'quoted\'&y="double"&z=!',
+  ]);
+});
+
+test('URL-shaped Markdown labels are not extracted as extra sources beside their destinations', () => {
+  const url = 'https://www.zhihu.com/question/2078550836104394358/answer/2087601635543495695?share_code=p9oOzR7JMXOw&utm_psn=2088411714484290935';
+  const label = url.replace(/_/g, '\\_');
+  const destination = url.replace(/&/g, '\\&');
+  assert.deepEqual(extractSourceUrls(`[${label}](${destination})\n${url}`), [url]);
+  assert.deepEqual(extractSourceUrls([
+    '[https://display.example/wrong](https://target.example/right "https://title.example/wrong")',
+    String.raw`[说明 [https://nested.example/wrong] 与 \[转义\]](https://target.example/nested)`,
+    '[https://display.example/not-a-source](javascript:alert(1))',
+    '正文 https://plain.example/after',
+  ].join('\n')), ['https://target.example/right','https://target.example/nested','https://plain.example/after']);
+});
+
+test('HTML hrefs keep literal and percent-encoded query values rather than applying Markdown unescaping', () => {
+  assert.deepEqual(extractSourceUrls(String.raw`<a href="https://example.com/?key\_one=%5C%5F&amp;key_two=%2b">https://example.com/?key\_one=%5C%5F&amp;key_two=%2b</a>`), [
+    String.raw`https://example.com/?key\_one=%5C%5F&key_two=%2b`,
+  ]);
+  assert.deepEqual(extractSourceUrls('<p><a href="https://target.example/right"><strong>https://display.example/wrong</strong></a> https://plain.example/after</p>'), [
+    'https://target.example/right','https://plain.example/after',
+  ]);
+});

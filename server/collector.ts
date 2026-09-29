@@ -203,7 +203,8 @@ export function extractSourceUrls(content: string): string[] {
   const masked = content.split('');
   const mask = (start: number, end: number) => { for (let i = start; i < end; i++) masked[i] = ' '; };
   const add = (url: string, offset: number, markdown = false, plain = false) => {
-    let decoded = decodeEntities(markdown ? url.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~])/g, '$1') : url);
+    // flomo also escapes punctuation in bare URLs when exporting a memo as Markdown.
+    let decoded = decodeEntities(markdown || plain ? url.replace(/\\([!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~])/g, '$1') : url);
     if (plain) {
       decoded = decoded.replace(/[。，、；：！？）》】」』]+$/, '');
       // Punctuation inside a query or fragment may be meaningful article identity.
@@ -219,15 +220,40 @@ export function extractSourceUrls(content: string): string[] {
     found.push({ offset, url: decoded });
   };
   // Read link destinations from HTML, then hide tags so href text isn't read twice.
+  let anchorStart: number | undefined;
   for (const tag of content.matchAll(/<\/?[a-z][\w:-]*(?:\s[^<>]*?)?\s*\/?>/gi)) {
+    let hasHref = false;
     for (const href of tag[0].matchAll(/\shref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi)) {
+      hasHref = true;
       add(href[1] ?? href[2] ?? href[3], tag.index + href.index);
+    }
+    if (/^<a(?:\s|>)/i.test(tag[0]) && hasHref) anchorStart = tag.index;
+    if (/^<\/a\s*>/i.test(tag[0]) && anchorStart !== undefined) {
+      // Anchor text, like a Markdown label, is display content rather than another destination.
+      mask(anchorStart, tag.index + tag[0].length);
+      anchorStart = undefined;
     }
     mask(tag.index, tag.index + tag[0].length);
   }
   const visible = masked.join('');
+  const escaped = (index: number) => {
+    let slashes = 0;
+    while (index > 0 && visible[--index] === '\\') slashes++;
+    return slashes % 2 === 1;
+  };
   // A small destination scanner handles nested and escaped URL parentheses.
   for (const match of visible.matchAll(/\]\(\s*/g)) {
+    if (escaped(match.index)) continue;
+    let labelStart = match.index - 1;
+    let brackets = 1;
+    for (; labelStart >= 0; labelStart--) {
+      const char = visible[labelStart];
+      if ((char === '[' || char === ']') && !escaped(labelStart)) {
+        if (char === ']') brackets++;
+        else if (--brackets === 0) break;
+      }
+    }
+    if (labelStart < 0) continue;
     const start = match.index + match[0].length;
     let end = start;
     let url = '';
@@ -252,9 +278,10 @@ export function extractSourceUrls(content: string): string[] {
     const suffix = visible.slice(end).match(/^\s*(?:(?:"[^"\n]*"|'[^'\n]*'|\([^\n]*?\))\s*)?\)/);
     if (!suffix) continue;
     add(url, start, true);
-    mask(start, end + suffix[0].length);
+    // Display labels can themselves look like URLs; only the actual destination is a source.
+    mask(labelStart, end + suffix[0].length);
   }
-  for (const match of masked.join('').matchAll(/https?:\/\/[^\s<>"'`]+/gi)) {
+  for (const match of masked.join('').matchAll(/https?:\/\/(?:\\[!"#$%&'()*+,\-./:;<=>?@[\]\\^_`{|}~]|[^\s<>"'`])+/gi)) {
     add(match[0], match.index, false, true);
   }
   return [...new Set(found.sort((a, b) => a.offset - b.offset).map(item => item.url))];
