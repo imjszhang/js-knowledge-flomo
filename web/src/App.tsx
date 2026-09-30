@@ -38,6 +38,7 @@ import { api, messageOf, sourceUrl } from "./api";
 import { useChanges, useDebounce, useDraft } from "./hooks";
 import InlineDiff from "./InlineDiff";
 import Modal from "./Modal";
+import { markdownExcerpt as excerpt } from "./markdown-text";
 import { AnalysisPanel } from "./AnalysisPanel";
 import { TopicDiscovery } from "./TopicDiscovery";
 import { CollectorMaterialCard, CollectorSources } from "./CollectorSources";
@@ -55,14 +56,6 @@ function date(value: string | undefined, detailed = false) {
       ? { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }
       : { month: "numeric", day: "numeric" },
   );
-}
-
-function excerpt(content: string, length = 180) {
-  return content
-    .replace(/<[^>]+>/g, "")
-    .replace(/[#*_>`]/g, "")
-    .trim()
-    .slice(0, length);
 }
 
 function Loading({ label = "正在读取…" }: { label?: string }) {
@@ -262,7 +255,7 @@ export function App() {
       </div>
       {libraryOpen && <Modal title="选择要继续的工作" onClose={() => setLibraryOpen(false)} drawer>
         <div className="segmented drawer-tabs"><button className={librarySection === "notes" ? "selected" : ""} onClick={() => setLibrarySection("notes")}>从笔记开始</button><button className={librarySection === "workspaces" ? "selected" : ""} onClick={() => setLibrarySection("workspaces")}>继续加工 <span>{workspaces.data?.length ?? 0}</span></button></div>
-        {librarySection === "notes" ? <><nav className="tag-navigation" aria-label="置顶标签">{[...tags, ""].map((item) => <button key={item} className={tag === item ? "selected" : ""} onClick={() => setTag(item)}>{item || "全部"}</button>)}</nav><Library tag={tag} onOpen={openMemo} flomoConfigured={health.data?.flomoConfigured} /></> : <div className="workspace-list">{workspaces.data?.length ? workspaces.data.map((item) => <button key={item.id} className={`workspace-row ${item.id === workspaceId ? "selected" : ""}`} onClick={() => void navigate(item.id)}><div><strong>{item.title}</strong><p>{item.goal || excerpt(item.draft, 90)}</p><span>{date(item.updatedAt, true)} · {item.materials.length + (item.collectorMaterials?.length ?? 0)} 条材料</span></div><ArrowRight size={16}/></button>) : <div className="empty-state"><h3>还没有加工中的笔记</h3><p>从置顶标签中选择一条笔记即可开始。</p><button className="text-button" onClick={() => setLibrarySection("notes")}>选择笔记<ArrowRight size={14}/></button></div>}</div>}
+        {librarySection === "notes" ? <><nav className="tag-navigation" aria-label="置顶标签">{[...tags, ""].map((item) => <button key={item} className={tag === item ? "selected" : ""} onClick={() => setTag(item)}>{item || "全部"}</button>)}</nav><Library tag={tag} onOpen={openMemo} flomoConfigured={health.data?.flomoConfigured} /></> : <div className="workspace-list">{workspaces.data?.length ? workspaces.data.map((item) => <button key={item.id} className={`workspace-row ${item.id === workspaceId ? "selected" : ""}`} onClick={() => void navigate(item.id)}><div><strong>{excerpt(item.title, 200)}</strong><p>{item.goal || excerpt(item.draft, 90)}</p><span>{date(item.updatedAt, true)} · {item.materials.length + (item.collectorMaterials?.length ?? 0)} 条材料</span></div><ArrowRight size={16}/></button>) : <div className="empty-state"><h3>还没有加工中的笔记</h3><p>从置顶标签中选择一条笔记即可开始。</p><button className="text-button" onClick={() => setLibrarySection("notes")}>选择笔记<ArrowRight size={14}/></button></div>}</div>}
         <ErrorBox error={navigationError}/>
       </Modal>}
       {settingsOpen && <SettingsDialog settings={settings.data} aiConfigured={health.data?.aiConfigured ?? false} flomoConfigured={health.data?.flomoConfigured ?? false} onClose={() => setSettingsOpen(false)} />}
@@ -589,7 +582,7 @@ function Workbench({ workspace, view, onView, aiConfigured, collectorConfigured,
   return (
     <main className="workbench">
       <section className="current-work">
-        <h1>{workspace.title}</h1>
+        <h1>{excerpt(workspace.title, 200)}</h1>
         <div className="work-meta"><MemoLink memo={workspace.source}>来源笔记</MemoLink><span>{date(workspace.source.created_at)}</span><details className="work-options"><summary aria-label="当前工作操作">更多<ChevronDown size={12}/></summary><div><button disabled={!!busy} onClick={() => void action("refresh", async () => update(await api.refresh(workspace.id)))}><RefreshCw size={13} className={busy === "refresh" ? "spin" : ""}/>检查 flomo 更新</button><button onClick={() => { void navigator.clipboard.writeText(`npm run --silent workbench -- workspace get ${workspace.id} --json`).then(() => { setCopyLabel("已复制"); setTimeout(() => setCopyLabel("复制 Codex 读取命令"), 2000); }).catch(() => setError("无法访问剪贴板，请通过当前页面地址中的工作区 ID 读取。")); }}><Terminal size={13}/>{copyLabel}</button><p>草稿版本 v{latestWorkspace.version}<br/>flomo 检查于 {date(latestWorkspace.lastCheckedAt, true)}</p></div></details></div>
         <GoalEditor workspace={latestWorkspace} onUpdate={update} onDirty={(dirty) => { goalDirty.current = dirty; }} />
       </section>
@@ -1155,7 +1148,7 @@ function AnnotationComposer({ workspace, jobs, onDirty, onCreated }: {workspace:
     {open && <div className="annotation-composer">
       <p className="scope-notice">写下自己的想法，创建一条新的 flomo 笔记，并自动双链到当前原笔记。可在正文添加 #想法 等标签。</p>
       <textarea aria-label="批注内容" value={content} disabled={busy || !!current} onChange={event => setContent(event.target.value)} placeholder="这条笔记让我想到……"/>
-      <p className="scope-notice">关联原笔记：<MemoLink memo={workspace.source}>{workspace.title}</MemoLink></p>
+      <p className="scope-notice">关联原笔记：<MemoLink memo={workspace.source}>{excerpt(workspace.title, 200)}</MemoLink></p>
       <ErrorBox error={error}/>
       {!current && <button className="button primary" disabled={busy || !content.trim()} onClick={() => { setBusy(true); setError(""); void api.annotate(workspace.id, content, key).then(job => {setSubmitted(job); onCreated();}).catch(error => setError(messageOf(error))).finally(() => setBusy(false)); }}>{busy ? "正在提交…" : "创建批注笔记"}</button>}
       {current && <p role="status">{current.status === "running" ? "正在创建批注…" : current.status === "succeeded" ? "已创建批注并关联原笔记" : current.error}</p>}
