@@ -86,6 +86,29 @@ test('context uses an independent nonnegative revision and surfaces selection co
   });
 });
 
+test('CLI can select and read the writing view using the context revision', async () => {
+  let context = { workspaceId:'w1',view:'note',revision:2 };
+  await withService(request => {
+    if (request.method === 'PUT') {
+      const input = request.body as { workspaceId:string;view:string;baseRevision:number };
+      assert.equal(input.baseRevision,context.revision);
+      context = { workspaceId:input.workspaceId,view:input.view,revision:context.revision + 1 };
+    }
+    return { body:context };
+  }, async (client,calls) => {
+    const selected = await invoke(client,['context','set','--workspace','w1','--view','writing','--base-revision','2','--json']);
+    assert.equal(selected.code,0,selected.stderr);
+    assert.equal(JSON.parse(selected.stdout).view,'writing');
+    const current = await invoke(client,['context','get','--json']);
+    assert.equal(current.code,0,current.stderr);
+    assert.deepEqual(JSON.parse(current.stdout),{ workspaceId:'w1',view:'writing',revision:3 });
+    assert.deepEqual(calls,[
+      { method:'PUT',path:'/api/v1/context',body:{ workspaceId:'w1',view:'writing',baseRevision:2 } },
+      { method:'GET',path:'/api/v1/context',body:undefined },
+    ]);
+  });
+});
+
 test('material recommendations and decisions retain human context with explicit versions', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'flomo-workflow-cli-'));
   try {
@@ -139,6 +162,8 @@ test('MCP exposes shared context, recommendations, decisions and current-workspa
       for (const name of ['workbench_context_get', 'workbench_context_set', 'workbench_workspace_goal', 'workbench_materials_propose', 'workbench_material_decide', 'workbench_decision_add', 'workbench_decision_answer', 'workbench_draft_history']) {
         assert.ok(inventory.tools.some(tool => tool.name === name), `Missing ${name}`);
       }
+      const contextView = inventory.tools.find(tool => tool.name === 'workbench_context_set')!.inputSchema.properties!.view as {enum:string[]};
+      assert.ok(contextView.enum.includes('writing'));
       const arguments_ = { id: 'current', items: [{ memoId: 'm1', reason: '质疑原来的假设', relation: 'counterpoint' }], baseVersion: 4 };
       const missing = await client.callTool({ name: 'workbench_materials_propose', arguments: arguments_ });
       assert.equal(missing.isError, true);

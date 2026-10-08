@@ -417,3 +417,104 @@ summary::marker { color: #819180; font-size: 11px; }
   .analysis-record-heading { flex-wrap: wrap; gap: 5px; }
   .analysis-record .analysis-actions .button { white-space: normal; }
 }
+
+/* Writing has its own place in the workbench; each surface has one primary task. */
+.writing-view .analysis-panel { margin: 0; }
+.writing-page-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin: 3px 0 23px; }
+.writing-page-heading h2 { font-size: 20px; font-weight: 650; line-height: 1.5; letter-spacing: -.35px; }
+.writing-page-heading p { margin-top: 7px; font-size: 13px; color: var(--muted); line-height: 1.7; }
+.writing-source-count { flex-shrink: 0; font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 20px; padding: 4px 9px; margin-top: 5px; }
+.analysis-navigation { display: flex; gap: 24px; border-bottom: 1px solid var(--border); margin-bottom: 22px; }
+.analysis-navigation > button { position: relative; padding: 0 1px 13px; border-radius: 0; color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 7px; }
+.analysis-navigation > button.selected { color: var(--green); font-weight: 650; }
+.analysis-navigation > button.selected::after { content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--green); }
+.analysis-navigation > button > span { font-size: 10px; color: var(--muted); font-weight: 400; }
+.writing-workflow { scroll-margin-top: 120px; }
+.writing-workflow, .analysis-tool-surface { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 24px; }
+.writing-stepper { display: flex; gap: 8px; padding: 0 0 23px; margin: 0 0 22px; border-bottom: 1px solid var(--border); }
+.writing-stepper button { display: flex; align-items: center; justify-content: center; gap: 8px; flex: 1; padding: 9px 5px; font-size: 12px; color: var(--muted); }
+.writing-stepper button[aria-current="step"] { color: var(--green); background: #edf4ef; font-weight: 650; }
+.writing-stepper button > span:first-child { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: #f0f2f0; color: #738077; font-size: 11px; flex-shrink: 0; }
+.writing-stepper button[aria-current="step"] > span:first-child { color: #fff; background: var(--green); }
+.writing-step-heading { margin-bottom: 22px; }
+.writing-step-heading h3 { font-size: 17px; line-height: 1.5; font-weight: 600; color: #253b2d; }
+.writing-step-heading p, .analysis-history-heading p { margin-top: 7px; font-size: 12px; color: var(--muted); line-height: 1.8; }
+.writing-settings { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-bottom: 18px; color: var(--muted); font-size: 11px; }
+.writing-settings label { display: flex; gap: 8px; align-items: center; }
+.writing-settings select { border: 1px solid var(--border); padding: 5px 8px; background: #fff; color: #48584e; font-size: 12px; }
+.writing-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; gap: 20px; }
+.writing-fieldset legend { padding: 0; }
+.writing-fieldset > label { color: #354b3e; font-size: 13px; gap: 8px; font-weight: 550; }
+.writing-fieldset textarea, .writing-fieldset input, .writing-fieldset select { font-weight: 400; font-size: 14px; border-radius: 8px; border-color: #dce3de; padding: 11px 12px; }
+.writing-fieldset textarea::placeholder, .writing-fieldset input::placeholder { color: #8b948d; font-size: 13px; }
+.writing-fieldset > .button, .writing-fieldset > .text-button { justify-self: start; }
+.writing-step-footer > span { font-size: 11px; color: var(--muted); line-height: 1.7; }
+.writing-step-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); }
+.writing-result { background: #f6f8f5; padding: 16px 18px; border-radius: 8px; border: 1px solid #e5eae3; font-size: 13px; line-height: 1.85; }
+.writing-result .analysis-output { margin: 8px 0 0; }
+.writing-result h4 { color: #4d6452; font-size: 12px; font-weight: 600; margin-bottom: 10px; }
+.writing-context { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-left: 3px solid #b0c8b5; background: #f5f8f5; font-size: 13px; line-height: 1.8; margin-bottom: 20px; overflow-wrap: anywhere; }
+.writing-context > .text-button { flex-shrink: 0; }
+.writing-context small { color: var(--muted); display: block; margin-bottom: 4px; font-size: 11px; }
+.analysis-tool-surface .analysis-form { gap: 19px; padding: 0; }
+.analysis-history-heading { margin-bottom: 20px; }
+.analysis-history-heading h3 { font-size: 16px; font-weight: 600; }
+.analysis-history > .analysis-record { padding: 0; margin: 12px 0; overflow: hidden; }
+.analysis-record-summary { padding: 16px 18px; list-style: none; }
+.analysis-record-summary::-webkit-details-marker { display: none; }
+.analysis-record-summary:hover { background: #f8faf8; }
+.analysis-record-summary .analysis-meta { margin-bottom: 0; }
+.analysis-record-summary .analysis-record-heading h3::before { content: '›'; display: inline-block; margin-right: 9px; color: #849189; transition: transform .12s; }
+.analysis-record[open] > .analysis-record-summary .analysis-record-heading h3::before { transform: rotate(90deg); }
+.analysis-record-body { border-top: 1px solid var(--border); padding: 4px 18px 18px; }
+.draft-view .editor-toolbar { justify-content: space-between; }
+@media (max-width: 520px) {
+  .work-tabs { gap: 2px; padding-left: 12px; padding-right: 12px; }
+  .work-tabs > button { gap: 5px; font-size: 12px; padding: 7px 4px; }
+  .work-tabs .tab-count { max-width: 45px; overflow: hidden; text-overflow: ellipsis; font-size: 9px; }
+  .writing-page-heading { gap: 10px; margin-bottom: 20px; }
+  .writing-page-heading h2 { font-size: 18px; }
+  .writing-page-heading p { font-size: 12px; }
+  .writing-source-count { font-size: 10px; }
+  .analysis-navigation { gap: 20px; }
+  .writing-workflow, .analysis-tool-surface { padding: 17px 14px; }
+  .writing-stepper { gap: 3px; margin-bottom: 18px; padding-bottom: 16px; }
+  .writing-stepper button { flex-direction: column; gap: 5px; font-size: 11px; padding: 8px 4px; }
+  .writing-step-footer .button { white-space: normal; }
+  .writing-result { padding: 12px; }
+}
+
+.draft-collection { margin-bottom: 24px; }
+.draft-collection .section-heading { align-items: flex-start; gap: 12px; }
+.draft-collection .section-description { margin: 7px 0 0; max-width: 440px; }
+.draft-library { display: grid; gap: 5px; padding: 6px; margin-top: 16px; border: 1px solid var(--border); background: #fff; border-radius: 10px; max-height: 268px; overflow: auto; }
+.draft-library-item { display: flex; align-items: center; width: 100%; min-width: 0; gap: 10px; padding: 10px 12px; text-align: left; border: 1px solid transparent; }
+.draft-library-item.selected { background: #edf4ef; border-color: #d1e1d5; }
+.draft-library-item > svg { color: #738778; }
+.draft-library-item > span { min-width: 0; flex: 1; }
+.draft-library-item strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 550; }
+.draft-library-item small { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.draft-library-item em { font-size: 10px; color: #66796b; font-style: normal; flex-shrink: 0; }
+.draft-target-heading, .note-draft-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 15px; }
+.draft-target-heading h3, .note-draft-header h3 { font-size: 16px; font-weight: 600; }
+.draft-target-heading > span, .note-draft-status { color: var(--muted); font-size: 11px; display: flex; align-items: center; gap: 5px; }
+.note-draft-status { flex-shrink: 0; padding-top: 3px; }
+.note-draft-editor { padding: 22px; background: #fff; border: 1px solid var(--border); border-radius: 10px; }
+.note-draft-editor > .analysis-card { margin-top: 0; padding: 0; border: 0; background: transparent; }
+.note-draft-editor .analysis-form { gap: 18px; }
+.note-draft-editor .analysis-form > label { font-size: 13px; }
+.note-draft-editor .analysis-form input, .note-draft-editor .analysis-form textarea { font-size: 14px; padding: 11px 12px; }
+.note-draft-editor .analysis-actions { margin: 20px 0 12px; }
+.note-draft-editor .selected-label { display: flex; align-items: center; gap: 6px; color: var(--green); font-size: 13px; margin-bottom: 10px; }
+.note-draft-sources li { overflow-wrap: anywhere; margin: 7px 0; line-height: 1.8; }
+.note-draft-sources a svg { margin-left: 4px; vertical-align: middle; }
+.draft-result-link { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 13px 0; border-bottom: 1px solid var(--border); border-radius: 0; text-align: left; gap: 12px; }
+.draft-result-link > span:first-child { font-size: 13px; }
+.draft-result-link > span:last-child { display: flex; gap: 4px; align-items: center; font-size: 11px; color: var(--green); flex-shrink: 0; }
+@media (max-width: 520px) {
+  .draft-collection .section-heading { flex-wrap: wrap; }
+  .note-draft-editor { padding: 16px 13px; }
+  .note-draft-header, .draft-target-heading { gap: 7px; flex-wrap: wrap; }
+  .draft-library-item { padding: 9px 8px; gap: 8px; }
+  .draft-result-link { align-items: flex-start; flex-direction: column; gap: 5px; }
+}

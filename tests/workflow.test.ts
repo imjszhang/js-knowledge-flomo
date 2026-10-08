@@ -75,6 +75,23 @@ test('active context persists across restart, hydrates current data and rejects 
   } finally {await store.close();await rm(dir,{recursive:true,force:true});}
 });
 
+test('writing view roundtrips through shared context without changing workspace content', async () => {
+  const f = await setup();
+  try {
+    const selected = await f.app.inject({method:'PUT',url:'/api/v1/context',headers:{'x-workbench-actor':'cli'},
+      payload:{workspaceId:f.workspace.id,view:'writing',baseRevision:0}});
+    assert.equal(selected.statusCode,200);
+    assert.equal(selected.json().view,'writing');
+    const current = (await f.app.inject('/api/v1/context')).json();
+    assert.equal(current.view,'writing');assert.equal(current.workspaceId,f.workspace.id);assert.equal(current.revision,1);
+    assert.equal(current.workspace.version,f.workspace.version);assert.equal(current.workspace.draft,f.workspace.draft);
+    const stale = await f.app.inject({method:'PUT',url:'/api/v1/context',headers:{'x-workbench-actor':'web'},
+      payload:{workspaceId:f.workspace.id,view:'draft',baseRevision:0}});
+    assert.equal(stale.statusCode,409);
+    assert.equal((await f.store.getContext()).view,'writing');
+  } finally {await f.close();}
+});
+
 test('candidate recommendations, choices and traditional material replacement share one versioned state', async () => {
   const f = await setup();const url = `/api/v1/workspaces/${f.workspace.id}`;
   try {
@@ -184,4 +201,19 @@ test('AI receives goal, selected evidence reasons and answered decisions, exclud
     assert.match(context,/Define the audience/);assert.match(context,/Relevant evidence/);assert.match(context,/New graduate students/);
     assert.doesNotMatch(context,/Never selected|Explicitly rejected|Full content pending|Full content rejected|Open question/);
   } finally {await f.close();}
+});
+
+test('new drafts clean imported prose escapes without modifying source snapshot or user edits', async () => {
+  const store = await Store.open(':memory:');
+  const source = {...memo('escaped'),content:String.raw`\*\*标题\*\*
+
+\- https://example.com/?share\_code=1`};
+  const service = new WorkbenchService(store,{...provider,get:async()=>source});
+  try {
+    const w = await service.createWorkspace(source.id,undefined,'web');
+    assert.equal(w.source.content,source.content);
+    assert.equal(w.draft,'**标题**\n\n- https://example.com/?share_code=1');
+    const edited = await store.updateWorkspace(w.id,w.version,'web','draft',v=>({...v,draft:String.raw`手写保留 \*`}));
+    assert.equal(edited.draft,String.raw`手写保留 \*`);
+  } finally {await service.close();await store.close();}
 });

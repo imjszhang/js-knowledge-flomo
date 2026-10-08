@@ -1,11 +1,12 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import OpenAI from 'openai';
-import type { ChatCompletionMessageParam } from 'openai/resources/chat/completions';
+import type { ChatCompletionChunk, ChatCompletionMessageParam } from 'openai/resources/chat/completions';
 import { getAccessToken, loadAuth } from '../cli/lib/auth.js';
 import type { Memo, MemoSearch, TagResult, Workspace } from '../shared/contracts.js';
 import type { AIProvider, FlomoProvider } from './provider-types.js';
 import { ProviderError } from './provider-types.js';
+import { AppError } from './errors.js';
 
 export type FlomoToolCall = (name: string, args: Record<string, unknown>) => Promise<unknown>;
 interface FlomoProviderOptions {
@@ -244,6 +245,37 @@ export function buildAIMessages(workspace: Workspace, prompt: string): ChatCompl
   return messages;
 }
 
+/** Reasoning models share this budget between thinking and the final answer. */
+export function aiOutputTokenLimit(value = process.env.LLM_MAX_OUTPUT_TOKENS): number {
+  if (!value?.trim()) return 16384;
+  const limit = Number(value);
+  if (!Number.isInteger(limit) || limit < 256 || limit > 131072)
+    throw new ProviderError('LLM_MAX_OUTPUT_TOKENS 必须是 256–131072 之间的整数，请按模型支持范围设置。', 'AI_INVALID_CONFIG', 503);
+  return limit;
+}
+
+export async function* readAIStream(stream: AsyncIterable<ChatCompletionChunk>): AsyncIterable<string> {
+  for await (const chunk of stream) {
+    const choice = chunk.choices[0];
+    const text = choice?.delta.content;
+    if (text) yield text;
+    if (choice?.finish_reason === 'length')
+      throw new ProviderError('模型已达到输出额度，分析尚未完成。推理也会占用额度；请提高 LLM_MAX_OUTPUT_TOKENS，或缩小分析范围后重试。', 'AI_OUTPUT_TRUNCATED');
+    if (choice?.finish_reason === 'content_filter')
+      throw new ProviderError('模型服务未能完成这次内容生成，请调整分析问题后重试。', 'AI_CONTENT_FILTERED');
+  }
+}
+
+function aiFailure(error: unknown): ProviderError {
+  // Never display upstream bodies: they may echo credentials or private inputs.
+  const status = record(error).status;
+  if (status === 401 || status === 403) return new ProviderError('模型服务拒绝访问，请检查 LLM_API_KEY 及模型使用权限。', 'AI_AUTH_FAILED');
+  if (status === 429) return new ProviderError('模型服务额度不足或请求过于频繁，请检查额度并稍后重试。', 'AI_RATE_LIMITED');
+  if (status === 400 || status === 404 || status === 422) return new ProviderError('模型服务不接受当前请求，请检查模型名称、接口地址及输出额度是否受支持。', 'AI_INVALID_REQUEST');
+  if (error instanceof OpenAI.APIConnectionTimeoutError) return new ProviderError('模型响应超时，请稍后重试或缩小分析范围。', 'AI_TIMEOUT');
+  return new ProviderError('无法完成模型请求，请检查服务连接并稍后重试。', 'AI_UNAVAILABLE');
+}
+
 interface AIProviderOptions {
   stream?: (messages: ChatCompletionMessageParam[], signal?: AbortSignal) => Promise<AsyncIterable<string>>;
 }
@@ -259,12 +291,9 @@ export function createAIProvider(options: AIProviderOptions = {}): AIProvider {
         const client = new OpenAI({ apiKey: process.env.LLM_API_KEY, baseURL: process.env.LLM_API_BASE_URL });
         const result = await client.chat.completions.create({
           model: process.env.LLM_API_MODEL || 'gpt-4.1-mini',
-          messages: items, stream: true, max_tokens: 4096,
+          messages: items, stream: true, max_tokens: aiOutputTokenLimit(),
         }, { signal: abortSignal });
-        for await (const chunk of result) {
-          const text = chunk.choices[0]?.delta.content;
-          if (text) yield text;
-        }
+        yield* readAIStream(result);
       });
       let output = '';
       try {
@@ -276,8 +305,8 @@ export function createAIProvider(options: AIProviderOptions = {}): AIProvider {
         if (!output.trim()) throw new ProviderError('模型未返回内容，请重试。', 'AI_EMPTY_RESPONSE');
         return output;
       } catch (error) {
-        if (signal?.aborted || error instanceof ProviderError) throw error;
-        throw new ProviderError('AI 生成失败，请检查模型配置及连接后重试。', 'AI_UNAVAILABLE');
+        if (signal?.aborted || error instanceof ProviderError || error instanceof AppError) throw error;
+        throw aiFailure(error);
       }
     },
   };

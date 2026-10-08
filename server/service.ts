@@ -4,7 +4,9 @@ import type { AIProvider, FlomoProvider } from './provider-types.js';
 import { extractSourceUrls, type CollectorProvider } from './collector.js';
 import { AppError } from './errors.js';
 import { Store } from './store.js';
+import { importedDraft } from '../shared/draft-markdown.js';
 import { AnalysisService } from './analysis.js';
+import { NoteDraftService } from './note-drafts.js';
 
 export function sameMemo(a: Memo, b: Memo): boolean {
   return a.content === b.content && a.updated_at === b.updated_at && JSON.stringify(a.tags) === JSON.stringify(b.tags);
@@ -15,8 +17,10 @@ export class WorkbenchService {
   private tasks = new Set<Promise<void>>();
   private controllers = new Set<AbortController>();
   readonly analysis: AnalysisService;
+  readonly noteDrafts: NoteDraftService;
   constructor(readonly store: Store, readonly flomo: FlomoProvider, readonly ai?: AIProvider, readonly collector?: CollectorProvider) {
     this.analysis = new AnalysisService(store,flomo,ai);
+    this.noteDrafts = new NoteDraftService(store,flomo);
   }
 
   private async locked<T>(id: string, operation: () => Promise<T>): Promise<T> {
@@ -34,14 +38,16 @@ export class WorkbenchService {
     this.tasks.add(task);
     void task.finally(() => this.tasks.delete(task));
   }
-  async settle(): Promise<void> { await Promise.all([...this.tasks]); await this.analysis.settle(); }
+  async settle(): Promise<void> { await Promise.all([...this.tasks]); await this.analysis.settle(); await this.noteDrafts.settle(); }
   async close(): Promise<void> {
     for (const controller of this.controllers) controller.abort();
     await this.analysis.close();
+    await this.noteDrafts.close();
     await this.settle();
   }
   async recover(): Promise<void> {
     await this.analysis.recover();
+    await this.noteDrafts.recover();
     for (const job of await this.store.listJobs()) {
       if (job.status !== 'running') continue;
       await this.store.putJob({ ...job, status: job.kind !== 'ai' ? 'uncertain' : 'failed',
@@ -52,7 +58,7 @@ export class WorkbenchService {
     const source = await this.flomo.get(memoId);
     const now = new Date().toISOString();
     return this.store.createWorkspace({ id: randomUUID(), memoId, title: title ?? (source.content.replace(/#[^\s]+/g,'').trim().split('\n')[0].slice(0,80) || '未命名笔记'),
-      source, remote: null, sourceChanged: false, draft: source.content, version: 1,
+      source, remote: null, sourceChanged: false, draft: importedDraft(source.content), version: 1,
       materials: [], messages: [], createdAt: now, updatedAt: now, lastCheckedAt: now }, actor);
   }
   async refresh(id: string, actor: Actor): Promise<Workspace> {

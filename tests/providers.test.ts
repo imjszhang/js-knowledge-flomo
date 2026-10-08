@@ -217,3 +217,48 @@ test('unlinked filter excludes incoming references across tags and dates but ign
   const result = await provider.search({tag:'概要',startDate:'2026-09-01',unlinkedOnly:true});
   assert.deepEqual(result.memos.map(m=>m.id),['external']);
 });
+
+test('reasoning output budget is configurable and invalid limits fail clearly', async () => {
+  const {aiOutputTokenLimit} = await import('../server/providers.js');
+  assert.equal(aiOutputTokenLimit(''),16384);
+  assert.equal(aiOutputTokenLimit('32768'),32768);
+  for (const value of ['0','-1','NaN','1024.5','131073']) assert.throws(() => aiOutputTokenLimit(value),{code:'AI_INVALID_CONFIG'});
+});
+
+test('stream truncation fails even after partial text, and reasoning is not exposed as the answer', async () => {
+  const {readAIStream} = await import('../server/providers.js');
+  for (const partial of ['', '尚未完成的答案']) {
+    const chunks: string[] = [];
+    async function* stream(): AsyncGenerator<any> {
+      yield {choices:[{delta:{reasoning_content:'private reasoning'},finish_reason:null}]};
+      if (partial) yield {choices:[{delta:{content:partial},finish_reason:null}]};
+      yield {choices:[{delta:{},finish_reason:'length'}]};
+    }
+    await assert.rejects(async () => {for await(const text of readAIStream(stream())) chunks.push(text);},{code:'AI_OUTPUT_TRUNCATED'});
+    assert.deepEqual(chunks,partial ? [partial] : []);
+  }
+  async function* completed(): AsyncGenerator<any> {
+    yield {choices:[{delta:{content:'完整答案'},finish_reason:null}]};
+    yield {choices:[{delta:{},finish_reason:'stop'}]};
+    yield {choices:[]};
+  }
+  const text: string[] = [];
+  for await (const chunk of readAIStream(completed())) text.push(chunk);
+  assert.deepEqual(text,['完整答案']);
+});
+
+test('AI service errors give safe actionable messages without upstream response bodies', async () => {
+  for (const [status,code] of [[401,'AI_AUTH_FAILED'],[429,'AI_RATE_LIMITED'],[400,'AI_INVALID_REQUEST'],[500,'AI_UNAVAILABLE']] as const) {
+    const provider=createAIProvider({stream:async () => {throw Object.assign(new Error('secret-key private prompt'),{status});}});
+    await assert.rejects(provider.generate(workspace(),'test',() => {}),(error: any) => {
+      assert.equal(error.code,code);assert.doesNotMatch(error.message,/secret-key|private prompt/);return true;
+    });
+  }
+});
+
+test('AI streaming keeps local validation failures actionable', async () => {
+  const {AppError} = await import('../server/errors.js');
+  const failure=new AppError('ANALYSIS_OUTPUT_LIMIT','分析结果超过长度上限',422);
+  const provider=createAIProvider({stream:async () => (async function* () {yield '正文';})()});
+  await assert.rejects(provider.generate(workspace(),'test',() => {throw failure;}),error => error === failure);
+});

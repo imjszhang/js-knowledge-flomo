@@ -5,7 +5,8 @@ import { randomUUID } from 'node:crypto';
 import { z, ZodError } from 'zod';
 import { createWorkspaceSchema, updateDraftSchema, materialsSchema, messageSchema, aiSchema, publishSchema, settingsSchema, versionSchema,
   contextSchema, goalSchema, candidatesSchema, candidateChoiceSchema, decisionSchema, decisionAnswerSchema, sourceAttachSchema,
-  discoverySchema, analysisCreateSchema, analysisResultSchema, analysisCardUpdateSchema, analysisCardPublishSchema } from '../shared/contracts.js';
+  discoverySchema, analysisCreateSchema, analysisResultSchema, analysisCardUpdateSchema, analysisCardPublishSchema,
+  noteDraftCreateSchema, noteDraftUpdateSchema, noteDraftPublishSchema } from '../shared/contracts.js';
 import type { Actor, Change } from '../shared/contracts.js';
 import { AppError } from './errors.js';
 import { ProviderError } from './provider-types.js';
@@ -75,6 +76,22 @@ export async function createApp({ service, webRoot, flomoConfigured, periodicRef
     return service.createWorkspace(body.memoId, body.title, actor(request));
   });
   app.get(`${root}/workspaces/:id`, request => store.getWorkspace(idOf(request)));
+  const noteDraftParams = z.object({id:z.string().min(1),draftId:z.string().min(1)});
+  app.post(`${root}/workspaces/:id/note-drafts`, async (request,reply) => {
+    const workspace = await service.noteDrafts.create(idOf(request),noteDraftCreateSchema.parse(request.body),actor(request));
+    reply.code(201);
+    return workspace;
+  });
+  app.patch(`${root}/workspaces/:id/note-drafts/:draftId`, request => {
+    const {id,draftId} = noteDraftParams.parse(request.params);
+    return service.noteDrafts.update(id,draftId,noteDraftUpdateSchema.parse(request.body),actor(request));
+  });
+  app.post(`${root}/workspaces/:id/note-drafts/:draftId/publish`, async (request,reply) => {
+    const {id,draftId} = noteDraftParams.parse(request.params);
+    const workspace = await service.noteDrafts.publish(id,draftId,noteDraftPublishSchema.parse(request.body),actor(request));
+    reply.code(202);
+    return workspace;
+  });
   const analysisParams = z.object({id:z.string().min(1),analysisId:z.string().min(1)});
   const cardParams = analysisParams.extend({cardId:z.string().min(1)});
   app.post(`${root}/workspaces/:id/discover`, request => service.analysis.discover(idOf(request),discoverySchema.parse(request.body),actor(request)));
