@@ -185,3 +185,18 @@ test('AI receives goal, selected evidence reasons and answered decisions, exclud
     assert.doesNotMatch(context,/Never selected|Explicitly rejected|Full content pending|Full content rejected|Open question/);
   } finally {await f.close();}
 });
+
+test('new drafts clean imported prose escapes without modifying source snapshot or user edits', async () => {
+  const store = await Store.open(':memory:');
+  const source = {...memo('escaped'),content:String.raw`\*\*标题\*\*
+
+\- https://example.com/?share\_code=1`};
+  const service = new WorkbenchService(store,{...provider,get:async()=>source});
+  try {
+    const w = await service.createWorkspace(source.id,undefined,'web');
+    assert.equal(w.source.content,source.content);
+    assert.equal(w.draft,'**标题**\n\n- https://example.com/?share_code=1');
+    const edited = await store.updateWorkspace(w.id,w.version,'web','draft',v=>({...v,draft:String.raw`手写保留 \*`}));
+    assert.equal(edited.draft,String.raw`手写保留 \*`);
+  } finally {await service.close();await store.close();}
+});

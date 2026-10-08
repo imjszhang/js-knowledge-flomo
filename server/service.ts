@@ -4,6 +4,7 @@ import type { AIProvider, FlomoProvider } from './provider-types.js';
 import { extractSourceUrls, type CollectorProvider } from './collector.js';
 import { AppError } from './errors.js';
 import { Store } from './store.js';
+import { importedDraft } from '../shared/draft-markdown.js';
 import { AnalysisService } from './analysis.js';
 
 export function sameMemo(a: Memo, b: Memo): boolean {
@@ -52,7 +53,7 @@ export class WorkbenchService {
     const source = await this.flomo.get(memoId);
     const now = new Date().toISOString();
     return this.store.createWorkspace({ id: randomUUID(), memoId, title: title ?? (source.content.replace(/#[^\s]+/g,'').trim().split('\n')[0].slice(0,80) || '未命名笔记'),
-      source, remote: null, sourceChanged: false, draft: source.content, version: 1,
+      source, remote: null, sourceChanged: false, draft: importedDraft(source.content), version: 1,
       materials: [], messages: [], createdAt: now, updatedAt: now, lastCheckedAt: now }, actor);
   }
   async refresh(id: string, actor: Actor): Promise<Workspace> {
