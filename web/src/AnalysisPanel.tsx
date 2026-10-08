@@ -43,6 +43,7 @@ export function AnalysisPanel({workspace, aiConfigured, disabled, flush, onUpdat
 }) {
   const client = useQueryClient();
   const [form, setForm] = useAnalysisInput<{kind: AnalysisKind; question: string}>(`flomo:analysis:${workspace.id}`, {kind: "insights", question: ""});
+  const [mode, setMode] = useState<"writing" | "analysis" | "results">("writing");
   const [writingBusy, setWritingBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -75,6 +76,7 @@ export function AnalysisPanel({workspace, aiConfigured, disabled, flush, onUpdat
       const attempt = requestAttempt.current;
       onUpdate(await api.createAnalysis(workspace.id, {...input, baseVersion: attempt.version, idempotencyKey: attempt.key}));
       requestAttempt.current = null;
+      setMode("results");
       if (!basis) setForm({...form, question: ""});
     } catch (error) {
       setError(messageOf(error));
@@ -105,10 +107,14 @@ export function AnalysisPanel({workspace, aiConfigured, disabled, flush, onUpdat
       void client.invalidateQueries({queryKey: ["workspace", workspace.id]});
     } finally { setBusy(false); }
   }
-  return <details className="quiet-disclosure analysis-panel">
-    <summary><Sparkles size={15}/>分析材料与写卡片<span>{records.length || ""}</span></summary>
-    <p className="section-description">把当前笔记、已选 flomo 材料和收藏原文串联起来。每次分析保留来源快照，方便核对判断的依据。</p>
-    <WritingPanel onBusy={setWritingBusy} workspace={workspace} aiConfigured={aiConfigured} disabled={disabled || busy} flush={flush} onUpdate={onUpdate} onMaterials={onMaterials} renderContent={renderContent}/>
+  return <section className="analysis-panel" aria-label="写作工作区">
+    <header className="writing-page-heading"><div><h2>把想法写成内容</h2><p>从一个判断出发，用材料补充，逐步写成草稿。</p></div><span className="writing-source-count">{1 + workspace.materials.length + (workspace.collectorMaterials?.length ?? 0)} 份材料</span></header>
+    <nav className="analysis-navigation" aria-label="写作工具">{([['writing','展开想法'],['analysis','分析材料'],['results','结果记录']] as const).map(([value,label]) => <button key={value} aria-pressed={mode === value} className={mode === value ? 'selected' : ''} onClick={() => setMode(value)}>{label}{value === 'results' && records.length > 0 && <span>{records.length}{active ? ' · 进行中' : ''}</span>}</button>)}</nav>
+    <div hidden={mode !== 'writing'}>
+    <WritingPanel onPreview={setApply} onBusy={setWritingBusy} workspace={workspace} aiConfigured={aiConfigured} disabled={disabled || busy} flush={flush} onUpdate={onUpdate} onMaterials={onMaterials} renderContent={renderContent}/>
+    </div>
+    <div hidden={mode !== 'analysis'} className="analysis-tool-surface">
+    <div className="writing-step-heading"><h3>梳理已有材料</h3><p>发现主题、比较观点或寻找联系，结果保留完整来源。</p></div>
     <form className="analysis-form" onSubmit={event => { event.preventDefault(); void run(aiConfigured ? "builtin" : "external"); }}>
       <label>分析方式<select aria-label="分析方式" value={form.kind} disabled={busy} onChange={event => { setForm({...form, kind: event.target.value as AnalysisKind}); requestAttempt.current = null; }}>{kinds.map(kind => <option key={kind} value={kind}>{analysisLabels[kind]}</option>)}</select></label>
       <label>想解决的问题（可选）<textarea aria-label="分析问题" value={form.question} rows={3} maxLength={5000} readOnly={busy} onChange={event => { setForm({...form, question: event.target.value}); requestAttempt.current = null; }} placeholder="例如：我对生态位有哪些判断？哪些相互支持，哪些仍有矛盾？"/></label>
@@ -116,10 +122,17 @@ export function AnalysisPanel({workspace, aiConfigured, disabled, flush, onUpdat
       <div className="analysis-actions"><button type="button" className="text-button subdued" disabled={busy} onClick={() => { setForm({...form, question: ""}); requestAttempt.current = null; }}>清空问题</button><button type="button" className="button secondary small" disabled={busy || disabled} onClick={() => void run("external")}><Terminal size={14}/>准备给 Codex</button><button type="button" className="button primary small" disabled={busy || disabled || !aiConfigured} onClick={() => void run("builtin")}>{busy ? <Loader2 size={14} className="spin"/> : <Sparkles size={14}/>}开始分析</button></div>
       <p className="agent-inline-note">{!aiConfigured && "尚未配置内置 AI，可先准备给 Codex。"}准备任务会保存材料和要求，请回到 Codex 对话让它继续当前分析；页面不会自动发起对话。</p>
     </form>
+    </div>
     {error && <p className="error-box" role="alert">{error}</p>}
-    <div className="analysis-history">{[...records].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(record => <article key={record.id} className={`analysis-record ${record.status}`}>
+    <div className="analysis-history" hidden={mode !== 'results'}>
+      <div className="analysis-history-heading"><h3>结果记录</h3><p>展开一份结果，核对来源后用于草稿或提炼卡片。</p></div>
+      {!records.length && <div className="empty-state"><FileText size={24}/><h3>还没有分析结果</h3><p>先展开一个想法，或分析已选材料。完成的内容会保存在这里。</p><button className="text-button" onClick={() => setMode('writing')}>开始展开想法</button></div>}
+      {[...records].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((record, index) => <details key={record.id} className={`analysis-record ${record.status}`} open={index === 0}>
+      <summary className="analysis-record-summary">
       <div className="analysis-record-heading"><h3>{record.writing ? writingLabels[record.writing.stage] : analysisLabels[record.kind]}</h3><span role="status">{record.status === "running" && <Loader2 size={12} className="spin"/>}{statusLabels[record.status]}</span></div>
       <p className="analysis-meta">{timestamp(record.createdAt)} · {record.engine === "builtin" ? "内置 AI" : "Codex / 外部助手"} · 使用 {record.sources.length} 份来源</p>
+      </summary>
+      <div className="analysis-record-body">
       {record.writing && <p className="analysis-question">{record.writing.claim}{record.writing.stage === "paragraph" ? ` · ${record.writing.section}` : ""}</p>}
       {record.question && <p className="analysis-question">{record.question}</p>}
       {analysisIsStale(record, workspace) && <p className="notice">当前目标或材料已经变化。这份分析仍使用生成时的快照，需要时可重新分析。</p>}
@@ -130,10 +143,11 @@ export function AnalysisPanel({workspace, aiConfigured, disabled, flush, onUpdat
       <SourceList sources={record.sources} renderContent={renderContent}/>
       {record.status === "succeeded" && <div className="analysis-actions"><button className="text-button" disabled={disabled || busy || !record.output} onClick={() => setApply(record.kind === "cards" ? record.cards.map(card => formatAnalysisCard(card, record.sources)).join("\n\n---\n\n") : record.output)}><FileText size={13}/>用于草稿</button>{record.kind !== "cards" && <><button className="text-button" disabled={disabled || busy || !aiConfigured} onClick={() => void run("builtin", record)}><Layers3 size={13}/>提炼候选卡片</button><button className="text-button subdued" disabled={disabled || busy} onClick={() => void run("external", record)}>交给 Codex 提炼</button></>}</div>}
       {record.cards.length > 0 && <div className="analysis-cards"><p className="section-description">逐张核对独立判断、标签和来源，保存后预览，再确认创建为新的 flomo 笔记。</p>{record.cards.map(card => <AnalysisCardEditor key={card.id} workspace={workspace} record={record} card={card} disabled={busy || disabled} flush={flush} onUpdate={onUpdate} onDirty={dirty => trackCard(`${record.id}:${card.id}`, dirty)} onPreview={() => previewCard(record, card)} renderContent={renderContent}/>)}</div>}
-    </article>)}</div>
+      </div>
+    </details>)}</div>
     {apply && <Modal title="将分析结果用于草稿" onClose={() => setApply(null)}><p className="modal-description">先核对下面的分析，再选择追加或替换。更改会自动保存到工作台，确认写回后才会更新 flomo。</p><div className="apply-preview">{renderContent(apply)}</div><div className="modal-actions"><button className="button secondary" disabled={disabled} onClick={() => { onApply(apply, "append"); setApply(null); }}>追加到草稿</button><button className="button primary" disabled={disabled} onClick={() => { onApply(apply, "replace"); setApply(null); }}>替换当前草稿</button></div></Modal>}
     {publishPreview && <Modal title="确认创建 flomo 卡片" onClose={() => { if (!busy) setPublishPreview(null); }}><p className="modal-description">以下完整内容将创建为一条新笔记，包含你确认的标签和来源链接。</p><div className="apply-preview">{renderContent(publishPreview.content)}</div>{workspace.version !== publishPreview.version && <p className="notice">工作区已更新，请关闭后重新预览最新内容。</p>}{error && <p className="error-box" role="alert">{error}</p>}<div className="modal-actions"><button className="button secondary" disabled={busy} onClick={() => setPublishPreview(null)}>返回核对</button><button className="button primary" disabled={busy || disabled || workspace.version !== publishPreview.version} onClick={() => void publish()}>{busy ? <Loader2 size={14} className="spin"/> : <ArrowUpRight size={14}/>}确认创建新笔记</button></div></Modal>}
-  </details>;
+  </section>;
 }
 
 function AnalysisCardEditor({workspace, record, card, disabled, flush, onUpdate, onDirty, onPreview, renderContent}: {

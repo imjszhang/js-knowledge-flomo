@@ -120,7 +120,7 @@ export interface DiscoveryResult {
   readCount: number;
   omitted: { memoId: string; reason: string }[];
 }
-export type WorkbenchView = 'note' | 'materials' | 'draft';
+export type WorkbenchView = 'note' | 'materials' | 'writing' | 'draft';
 export interface ActiveContext {
   workspaceId: string | null;
   view: WorkbenchView;
@@ -219,7 +219,7 @@ export const messageSchema = z.object({ role: z.enum(['user', 'assistant']), con
 export const aiSchema = z.object({ prompt: z.string().min(1).max(30_000), baseVersion: versionSchema, idempotencyKey: z.string().min(1).max(200) }).strict();
 export const publishSchema = z.object({ baseVersion: versionSchema, idempotencyKey: z.string().min(1).max(200) }).strict();
 export const settingsSchema = z.object({ pinnedTags: z.array(z.string().min(1).max(100)).min(1).max(20), refreshSeconds: z.union([z.literal(0), z.number().int().min(30).max(3600)]) }).strict();
-export const contextSchema = z.object({ workspaceId:z.string().min(1).nullable(), view:z.enum(['note','materials','draft']), baseRevision:z.number().int().nonnegative() }).strict();
+export const contextSchema = z.object({ workspaceId:z.string().min(1).nullable(), view:z.enum(['note','materials','writing','draft']), baseRevision:z.number().int().nonnegative() }).strict();
 export const goalSchema = z.object({ goal:z.string().max(5000), baseVersion:versionSchema }).strict();
 export const candidatesSchema = z.object({ items:z.array(z.object({ memoId:z.string().min(1), reason:z.string().min(1).max(2000), relation:z.enum(['support','counterpoint','example','background']) }).strict()).min(1).max(30), baseVersion:versionSchema }).strict();
 export const candidateChoiceSchema = z.object({ status:z.enum(['selected','dismissed','proposed']), baseVersion:versionSchema }).strict();

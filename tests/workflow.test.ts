@@ -75,6 +75,23 @@ test('active context persists across restart, hydrates current data and rejects 
   } finally {await store.close();await rm(dir,{recursive:true,force:true});}
 });
 
+test('writing view roundtrips through shared context without changing workspace content', async () => {
+  const f = await setup();
+  try {
+    const selected = await f.app.inject({method:'PUT',url:'/api/v1/context',headers:{'x-workbench-actor':'cli'},
+      payload:{workspaceId:f.workspace.id,view:'writing',baseRevision:0}});
+    assert.equal(selected.statusCode,200);
+    assert.equal(selected.json().view,'writing');
+    const current = (await f.app.inject('/api/v1/context')).json();
+    assert.equal(current.view,'writing');assert.equal(current.workspaceId,f.workspace.id);assert.equal(current.revision,1);
+    assert.equal(current.workspace.version,f.workspace.version);assert.equal(current.workspace.draft,f.workspace.draft);
+    const stale = await f.app.inject({method:'PUT',url:'/api/v1/context',headers:{'x-workbench-actor':'web'},
+      payload:{workspaceId:f.workspace.id,view:'draft',baseRevision:0}});
+    assert.equal(stale.statusCode,409);
+    assert.equal((await f.store.getContext()).view,'writing');
+  } finally {await f.close();}
+});
+
 test('candidate recommendations, choices and traditional material replacement share one versioned state', async () => {
   const f = await setup();const url = `/api/v1/workspaces/${f.workspace.id}`;
   try {

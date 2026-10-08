@@ -172,7 +172,7 @@ const usage = `flomo workbench CLI (requires the local service)
   workspace rebase ID --base-version N
   workspace goal ID (--file PATH | --stdin | --text TEXT) --base-version N
   context get
-  context set --workspace ID|none --view note|materials|draft --base-revision N
+  context set --workspace ID|none --view note|materials|writing|draft --base-revision N
   draft update ID (--file PATH | --stdin | --text TEXT) --base-version N [--summary TEXT]
   draft diff ID | draft history ID
   draft publish ID --expected-version N --idempotency-key KEY
@@ -338,7 +338,7 @@ export async function runCli(args: string[], io: CliIO = defaultIO, suppliedClie
       case 'context set': {
         const workspaceId = string('workspace', true)!;
         const parsed = contextSchema.safeParse({ workspaceId: workspaceId === 'none' ? null : workspaceId, view: string('view', true), baseRevision: integer('base-revision', undefined, 0) });
-        if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', '--view must be note, materials or draft.', 2);
+        if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', '--view must be note, materials, writing or draft.', 2);
         if (parsed.data.workspaceId === 'current') parsed.data.workspaceId = await client.resolveWorkspaceId('current', parsed.data.baseRevision);
         result = await client.request('PUT', '/context', parsed.data);
         break;

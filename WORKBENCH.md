@@ -202,7 +202,7 @@ npm run --silent workbench -- context get --json
 npm run --silent workbench -- context set --workspace WORKSPACE_ID --view materials --base-revision CONTEXT_REVISION --json
 ```
 
-`view` 可选 `note`、`materials`、`draft`。`--workspace none` 清空当前选择。`--base-revision` 对应选择状态的 `revision`，最初可以为 0，**与草稿等内容的 `--base-version` 是不同计数器**。选择被其他入口改变时返回冲突，重新读取上下文再决定是否切换。Web 通过共享上下文恢复当前工作；同一服务的多个页面也共享这份选择。
+`view` 可选 `note`（笔记）、`materials`（材料）、`writing`（写作）、`draft`（草稿）。`--workspace none` 清空当前选择。`--base-revision` 对应选择状态的 `revision`，最初可以为 0，**与草稿等内容的 `--base-version` 是不同计数器**。选择被其他入口改变时返回冲突，重新读取上下文再决定是否切换。Web 通过共享上下文恢复当前工作；同一服务的多个页面也共享这份选择。
 
 ## 发布与冲突
 
@@ -357,7 +357,7 @@ npm run --silent workbench -- job get JOB_ID --json
 
 ### 引导写作
 
-在笔记页展开「分析材料与写卡片 → 把这条想法展开」。填写核心判断和读者，先生成追问，再补充自己的回答，并在材料页明确选用依据。可用第一句话展开、SCQA 或黄金圈生成提纲。选择并编辑一份完成的提纲，指定一段，点击确认后展开；结果通过现有「用于草稿」预览追加或替换。不会自动写回 flomo。
+点击顶部「写作」，进入「把这条想法展开」。填写核心判断和读者，先生成追问，再补充自己的回答，并在材料页明确选用依据。可用第一句话展开、SCQA 或黄金圈生成提纲。选择并编辑一份完成的提纲，指定一段，点击确认后展开；结果通过现有「用于草稿」预览追加或替换。不会自动写回 flomo。
 
 表单输入按工作区保存在当前浏览器；每次任务将写作参数、来源全文和结果存入共享分析记录。Codex 模式仅准备任务，需要在对话中让助手读取记录 instructions 和 sources、完成并回填结果。材料或目标变化后必须重新生成提纲；补材料前的追问仍可用于新提纲。
 
