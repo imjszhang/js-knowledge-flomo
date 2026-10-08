@@ -4,6 +4,7 @@ import type { Actor, AnalysisCard, AnalysisCardInput, AnalysisKind, AnalysisReco
 import { analysisCardInputSchema, analysisCardPublishSchema, analysisCardUpdateSchema, analysisCreateSchema, analysisResultSchema, discoverySchema } from '../shared/contracts.js';
 import { analysisFingerprint, analysisIsStale, analysisSources, formatAnalysisCard } from '../shared/analysis.js';
 import type { AIProvider, FlomoProvider } from './provider-types.js';
+import { ProviderError } from './provider-types.js';
 import { AppError } from './errors.js';
 import { Store } from './store.js';
 import { extractSourceUrls } from './collector.js';
@@ -311,7 +312,7 @@ export class AnalysisService {
       const cards = record.kind === 'cards' ? this.cards(this.parseCards(result),record) : [];
       await this.updateRunning(id,record.id,record.actor,{status:'succeeded',output:result,cards});
     } catch (error) {
-      await this.updateRunning(id,record.id,record.actor,{status:'failed',error:error instanceof AppError ? error.message : controller.signal.aborted ? '分析已中断，请重新发起' : '分析失败，请检查模型配置及返回格式后重新发起'});
+      await this.updateRunning(id,record.id,record.actor,{status:'failed',error:controller.signal.aborted ? '分析已中断，请重新发起' : error instanceof AppError || error instanceof ProviderError ? error.message : '分析失败，请稍后重新发起'});
     } finally { this.controllers.delete(controller); }
   }
   private updateRunning(id: string, analysisId: string, actor: Actor, patch: Partial<AnalysisRecord>): Promise<Workspace> {

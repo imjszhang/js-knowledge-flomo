@@ -302,7 +302,7 @@ npm run --silent workbench -- settings set --file settings.json --json
 
 ## 可选内置 AI
 
-配置项目的 OpenAI 兼容 API 后，可在 Web 或 CLI 启动后台生成任务：
+配置项目的 OpenAI 兼容 API 后，可在 Web 或 CLI 启动后台生成任务。`LLM_MAX_OUTPUT_TOKENS` 默认 `16384`，可按模型支持范围调整（256–131072）；推理模型的思考过程也会消耗这个额度。修改配置后重启工作台。达到额度时，任务会标记失败并说明原因，部分输出不视为完整分析：
 
 ```bash
 npm run --silent workbench -- ai run WORKSPACE_ID --prompt "结合已选材料，提出三个值得追问的问题，并标明来源" --base-version CURRENT_VERSION --idempotency-key ai-WORKSPACE_ID-UNIQUE_REQUEST --json

@@ -356,3 +356,13 @@ test('guided writing preserves answers and edited outline, permits finding new m
   await assert.rejects(f.service.create(w.id,{...creation(w,'outline','stale'),writing:paragraph,basisAnalysisId:outline.id},'web'),{code:'ANALYSIS_STALE'});
   await assert.rejects(f.service.create(w.id,{...creation(w,'outline','missing'),writing:paragraph},'web'),{code:'INVALID_WRITING'});
 });
+
+test('builtin analysis preserves safe provider failure reasons instead of reporting a format error', async t => {
+  const {ProviderError} = await import('../server/provider-types.js');
+  const reason='模型已达到输出额度，请提高上限后重试。';
+  const f=await fixture(t,{async generate() {throw new ProviderError(reason,'AI_OUTPUT_TRUNCATED');}});
+  await f.service.create(f.workspace.id,{...creation(f.workspace),engine:'builtin'},'web');
+  await f.service.settle();
+  const result=(await f.store.getWorkspace(f.workspace.id)).analyses![0];
+  assert.equal(result.status,'failed');assert.equal(result.error,reason);
+});
