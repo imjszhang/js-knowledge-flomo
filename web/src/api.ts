@@ -82,7 +82,7 @@ export const api = {
   discover: (id: string, input: {terms: string[]; tag?: string; excludeTag?: string; startDate?: string; endDate?: string; limit: number; baseVersion: number}) =>
     mutation<DiscoveryResult>(`/workspaces/${encodeURIComponent(id)}/discover`, input),
   analyses: (id: string) => request<AnalysisRecord[]>(`/workspaces/${encodeURIComponent(id)}/analyses`),
-  createAnalysis: (id: string, input: {kind: AnalysisKind; question: string; engine: "builtin" | "external"; basisAnalysisId?: string; baseVersion: number; idempotencyKey: string}) =>
+  createAnalysis: (id: string, input: {kind: AnalysisKind; question: string; engine: "builtin" | "external"; basisAnalysisId?: string; writing?: import("../../shared/contracts").WritingInput; baseVersion: number; idempotencyKey: string}) =>
     mutation<Workspace>(`/workspaces/${encodeURIComponent(id)}/analyses`, input),
   saveAnalysisCard: (id: string, analysisId: string, cardId: string, input: AnalysisCardInput & {baseVersion: number}) =>
     mutation<Workspace>(`/workspaces/${encodeURIComponent(id)}/analyses/${encodeURIComponent(analysisId)}/cards/${encodeURIComponent(cardId)}`, input, "PATCH"),

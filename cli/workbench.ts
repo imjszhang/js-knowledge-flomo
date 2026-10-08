@@ -180,7 +180,7 @@ const usage = `flomo workbench CLI (requires the local service)
   material propose ID --file PATH --base-version N
   material decide ID --memo ID --status selected|dismissed|proposed --base-version N
   material discover ID --terms TERM1,TERM2 [--tag TAG] [--exclude-tag TAG] [--start-date DATE] [--end-date DATE] [--limit N] --base-version N
-  analysis create ID --kind insights|evolution|connections|outline|cards --engine builtin|external [--question TEXT] [--basis ANALYSIS_ID] --base-version N --idempotency-key KEY
+  analysis create ID --kind insights|evolution|connections|outline|cards --engine builtin|external [--question TEXT] [--basis ANALYSIS_ID] [--file WRITING_JSON] --base-version N --idempotency-key KEY
   analysis list ID | analysis get ID --analysis ANALYSIS_ID
   analysis complete ID --analysis ANALYSIS_ID --file PATH --base-version N
   analysis card-update ID --analysis ANALYSIS_ID --card CARD_ID --file PATH --base-version N
@@ -246,7 +246,7 @@ const commandOptions: Record<string, { flags: string[]; id?: boolean }> = {
   'material propose': { flags: ['file', 'base-version'], id: true },
   'material decide': { flags: ['memo', 'status', 'base-version'], id: true },
   'material discover': { flags: ['terms', 'tag', 'exclude-tag', 'start-date', 'end-date', 'limit', 'base-version'], id: true },
-  'analysis create': { flags: ['kind', 'engine', 'question', 'basis', 'base-version', 'idempotency-key'], id: true },
+  'analysis create': { flags: ['kind', 'engine', 'question', 'basis', 'file', 'base-version', 'idempotency-key'], id: true },
   'analysis list': { flags: [], id: true }, 'analysis get': { flags: ['analysis'], id: true },
   'analysis complete': { flags: ['analysis', 'file', 'base-version'], id: true },
   'analysis card-update': { flags: ['analysis', 'card', 'file', 'base-version'], id: true },
@@ -374,7 +374,7 @@ export async function runCli(args: string[], io: CliIO = defaultIO, suppliedClie
         break;
       }
       case 'analysis create': {
-        const parsed = analysisCreateSchema.safeParse({ kind: string('kind', true), engine: string('engine', true), question: string('question'), basisAnalysisId: string('basis'), baseVersion: integer('base-version'), idempotencyKey: string('idempotency-key', true) });
+        const parsed = analysisCreateSchema.safeParse({ writing: string('file') ? await jsonFile() : undefined, kind: string('kind', true), engine: string('engine', true), question: string('question'), basisAnalysisId: string('basis'), baseVersion: integer('base-version'), idempotencyKey: string('idempotency-key', true) });
         if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', 'Use kind insights, evolution, connections, outline or cards; engine builtin or external; question up to 5000 characters; and a nonempty idempotency key up to 200 characters.', 2);
         result = await workspaceRequest('POST', '/analyses', parsed.data);
         break;

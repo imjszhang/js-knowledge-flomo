@@ -97,6 +97,7 @@ export interface AnalysisRecord {
   engine: 'builtin' | 'external';
   question: string;
   basisAnalysisId?: string;
+  writing?: WritingInput;
   status: 'prepared' | 'running' | 'succeeded' | 'failed';
   workspaceVersion: number;
   inputFingerprint: string;
@@ -230,8 +231,15 @@ export const discoverySchema = z.object({
   startDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   limit:z.number().int().min(1).max(30).default(20), baseVersion:versionSchema,
 }).strict();
+export const writingInputSchema = z.object({
+  stage:z.enum(['questions','outline','paragraph']), claim:z.string().trim().min(1).max(2000),
+  audience:z.string().trim().max(1000).default(''), answers:z.string().trim().max(10000).default(''),
+  structure:z.enum(['direct','scqa','golden-circle']),
+  outline:z.string().trim().max(20000).default(''), section:z.string().trim().max(2000).default(''),
+}).strict();
+export type WritingInput = z.infer<typeof writingInputSchema>;
 export const analysisCreateSchema = z.object({kind:analysisKindSchema, question:z.string().trim().max(5000).default(''),
-  engine:z.enum(['builtin','external']), basisAnalysisId:z.string().min(1).optional(), baseVersion:versionSchema,
+  writing:writingInputSchema.optional(), engine:z.enum(['builtin','external']), basisAnalysisId:z.string().min(1).optional(), baseVersion:versionSchema,
   idempotencyKey:z.string().min(1).max(200),
 }).strict();
 export const analysisCardInputSchema = z.object({title:z.string().trim().min(1).max(200),body:z.string().trim().min(1).max(15000),

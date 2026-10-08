@@ -5,6 +5,7 @@ import type { AnalysisCard, AnalysisCardInput, AnalysisKind, AnalysisRecord, Ana
 import { analysisIsStale, analysisLabels, formatAnalysisCard } from "../../shared/analysis";
 import { ApiError, api, messageOf, sourceUrl } from "./api";
 import { useAnalysisInput } from "./analysis-forms";
+import {WritingPanel, writingLabels} from "./WritingPanel";
 import Modal from "./Modal";
 
 type RenderContent = (content: string) => ReactNode;
@@ -29,7 +30,8 @@ function SourceList({sources, renderContent}: {sources: AnalysisSource[]; render
   return <details className="analysis-sources" open={expanded} onToggle={event => setExpanded(event.currentTarget.open)}><summary>查看本次分析的 {sources.length} 份来源快照</summary>{expanded && sources.map(source => <SourceSnapshot key={source.key} source={source} renderContent={renderContent}/>)}</details>;
 }
 
-export function AnalysisPanel({workspace, aiConfigured, disabled, flush, onUpdate, onApply, onDirty, renderContent}: {
+export function AnalysisPanel({workspace, aiConfigured, disabled, flush, onUpdate, onApply, onDirty, onMaterials, renderContent}: {
+  onMaterials: () => void;
   workspace: Workspace;
   aiConfigured: boolean;
   disabled: boolean;
@@ -41,6 +43,7 @@ export function AnalysisPanel({workspace, aiConfigured, disabled, flush, onUpdat
 }) {
   const client = useQueryClient();
   const [form, setForm] = useAnalysisInput<{kind: AnalysisKind; question: string}>(`flomo:analysis:${workspace.id}`, {kind: "insights", question: ""});
+  const [writingBusy, setWritingBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [apply, setApply] = useState<string | null>(null);
@@ -49,7 +52,7 @@ export function AnalysisPanel({workspace, aiConfigured, disabled, flush, onUpdat
   const requestAttempt = useRef<{signature: string; version: number; key: string} | null>(null);
   const records = workspace.analyses ?? [];
   const active = records.some(record => record.status === "running" || record.cards.some(card => card.status === "publishing"));
-  useEffect(() => { onDirty(!!form.question.trim() || busy || dirtyCards.size > 0); }, [form.question, busy, dirtyCards]);
+  useEffect(() => { onDirty(!!form.question.trim() || busy || writingBusy || dirtyCards.size > 0); }, [form.question, busy, writingBusy, dirtyCards]);
   useEffect(() => {
     if (!active) return;
     const timer = setInterval(() => { void client.invalidateQueries({queryKey: ["workspace", workspace.id]}); }, 2000);
@@ -105,6 +108,7 @@ export function AnalysisPanel({workspace, aiConfigured, disabled, flush, onUpdat
   return <details className="quiet-disclosure analysis-panel">
     <summary><Sparkles size={15}/>分析材料与写卡片<span>{records.length || ""}</span></summary>
     <p className="section-description">把当前笔记、已选 flomo 材料和收藏原文串联起来。每次分析保留来源快照，方便核对判断的依据。</p>
+    <WritingPanel onBusy={setWritingBusy} workspace={workspace} aiConfigured={aiConfigured} disabled={disabled || busy} flush={flush} onUpdate={onUpdate} onMaterials={onMaterials} renderContent={renderContent}/>
     <form className="analysis-form" onSubmit={event => { event.preventDefault(); void run(aiConfigured ? "builtin" : "external"); }}>
       <label>分析方式<select aria-label="分析方式" value={form.kind} disabled={busy} onChange={event => { setForm({...form, kind: event.target.value as AnalysisKind}); requestAttempt.current = null; }}>{kinds.map(kind => <option key={kind} value={kind}>{analysisLabels[kind]}</option>)}</select></label>
       <label>想解决的问题（可选）<textarea aria-label="分析问题" value={form.question} rows={3} maxLength={5000} readOnly={busy} onChange={event => { setForm({...form, question: event.target.value}); requestAttempt.current = null; }} placeholder="例如：我对生态位有哪些判断？哪些相互支持，哪些仍有矛盾？"/></label>
@@ -114,8 +118,9 @@ export function AnalysisPanel({workspace, aiConfigured, disabled, flush, onUpdat
     </form>
     {error && <p className="error-box" role="alert">{error}</p>}
     <div className="analysis-history">{[...records].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(record => <article key={record.id} className={`analysis-record ${record.status}`}>
-      <div className="analysis-record-heading"><h3>{analysisLabels[record.kind]}</h3><span role="status">{record.status === "running" && <Loader2 size={12} className="spin"/>}{statusLabels[record.status]}</span></div>
+      <div className="analysis-record-heading"><h3>{record.writing ? writingLabels[record.writing.stage] : analysisLabels[record.kind]}</h3><span role="status">{record.status === "running" && <Loader2 size={12} className="spin"/>}{statusLabels[record.status]}</span></div>
       <p className="analysis-meta">{timestamp(record.createdAt)} · {record.engine === "builtin" ? "内置 AI" : "Codex / 外部助手"} · 使用 {record.sources.length} 份来源</p>
+      {record.writing && <p className="analysis-question">{record.writing.claim}{record.writing.stage === "paragraph" ? ` · ${record.writing.section}` : ""}</p>}
       {record.question && <p className="analysis-question">{record.question}</p>}
       {analysisIsStale(record, workspace) && <p className="notice">当前目标或材料已经变化。这份分析仍使用生成时的快照，需要时可重新分析。</p>}
       {record.error && <p className="error-box" role="alert">{record.error}</p>}

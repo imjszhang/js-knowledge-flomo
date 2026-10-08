@@ -354,3 +354,17 @@ npm run --silent workbench -- job get JOB_ID --json
 在「笔记」视图点击「写批注」，输入自己的想法后选择「创建批注笔记」。新笔记自动附上原笔记链接形成 flomo 双链，原文和工作草稿保持不变。输入会保存在当前浏览器，创建记录经 Web/CLI/MCP 共享。CLI：`annotation create WORKSPACE_ID --text '我的想法 #想法' --idempotency-key UNIQUE_KEY`；MCP：`workbench_annotation_create`。提交重试必须复用同一请求标识；结果待核实时先到 flomo 核对，勿重新创建。
 
 「从笔记开始」支持勾选「只看尚未双链的笔记」，同时检查本条的 `linked_memos` 和全局反向引用（其他笔记指向本条），外部网页链接不计入。反向检索逐条验证关联 ID，不使用语义相似结果作为双链证据；受远端检索范围限制，仍可能漏掉未返回的引用。可与标签、关键词及日期组合；仅过滤本次远端候选，不代表全库扫描。CLI：`memo list --unlinked-only`；MCP：`workbench_memo_list` 的 `unlinkedOnly: true`。
+
+### 引导写作
+
+在笔记页展开「分析材料与写卡片 → 把这条想法展开」。填写核心判断和读者，先生成追问，再补充自己的回答，并在材料页明确选用依据。可用第一句话展开、SCQA 或黄金圈生成提纲。选择并编辑一份完成的提纲，指定一段，点击确认后展开；结果通过现有「用于草稿」预览追加或替换。不会自动写回 flomo。
+
+表单输入按工作区保存在当前浏览器；每次任务将写作参数、来源全文和结果存入共享分析记录。Codex 模式仅准备任务，需要在对话中让助手读取记录 instructions 和 sources、完成并回填结果。材料或目标变化后必须重新生成提纲；补材料前的追问仍可用于新提纲。
+
+API/MCP 的 analysis create 支持可选 `writing` 对象。CLI 使用 `analysis create ID --kind insights|outline --engine builtin|external --file writing.json --base-version N --idempotency-key KEY`，后续阶段可加 `--basis ANALYSIS_ID`。JSON 格式：
+
+```json
+{"stage":"questions","claim":"生态位需要需求验证","audience":"独立创作者","answers":"","structure":"direct","outline":"","section":""}
+```
+
+`stage` 为 questions / outline / paragraph；questions 对应 kind insights，后两者对应 outline。structure 为 direct / scqa / golden-circle。paragraph 必须提供同一判断下已完成且未过期的 outline 分析 ID、确认编辑后的 outline 正文和 section；读者、补充回答或结构变化后应先生成新提纲。沿用现有版本检查、幂等键和每工作区最多 12 份分析的限制。

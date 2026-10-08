@@ -326,3 +326,30 @@ test('publication is uncertain when remote body changes even if all source links
   const stored = (await f.store.getWorkspace(current.id)).analyses![0].cards[0];
   assert.equal(stored.status,'uncertain');assert.equal(stored.resultMemo!.id,'new-1');assert.equal(f.flomo.creates.length,1);
 });
+
+test('guided writing preserves answers and edited outline, permits finding new materials between questions and outline, and rejects stale paragraph bases', async t => {
+  const f = await fixture(t);
+  const writing = {stage:'questions' as const,claim:'生态位需要需求验证',audience:'独立创作者',answers:'我的经验，仍需验证',structure:'direct' as const,outline:'',section:''};
+  let w = await f.service.create(f.workspace.id,{...creation(f.workspace),writing},'web');
+  const q = w.analyses!.at(-1)!;
+  assert.deepEqual(q.writing,writing);
+  assert.match(q.instructions,/不能冒充已证实事实/);
+  w = await f.service.complete(w.id,q.id,{text:'需求来自谁？',baseVersion:w.version},'mcp');
+  w = await f.store.updateWorkspace(w.id,w.version,'web','materials',v=>({...v,materials:[memo('evidence')]}));
+  w = await f.service.create(w.id,{...creation(w,'outline','outline'),writing:{...writing,stage:'outline'},basisAnalysisId:q.id},'web');
+  const outline = w.analyses!.at(-1)!;
+  assert.equal(outline.sources.length,2);
+  w = await f.service.complete(w.id,outline.id,{text:'一、验证需求',baseVersion:w.version},'mcp');
+  const paragraph = { ...writing,stage:'paragraph' as const,outline:'一、先定义需求\n二、验证需求',section:'先定义需求'};
+  const request = {...creation(w,'outline','paragraph'),writing:paragraph,basisAnalysisId:outline.id};
+  w = await f.service.create(w.id,request,'web');
+  assert.match(w.analyses!.at(-1)!.instructions,/先定义需求/);
+  assert.equal(w.draft,f.workspace.draft);
+  assert.equal(f.flomo.creates.length,0);
+  assert.equal((await f.service.create(w.id,request,'web')).version,w.version);
+  await assert.rejects(f.service.create(w.id,{...request,writing:{...paragraph,section:'另一个段落'}},'web'),{code:'IDEMPOTENCY_CONFLICT'});
+  await assert.rejects(f.service.create(w.id,{...creation(w,'outline','changed'),writing:{...paragraph,answers:'新补充'},basisAnalysisId:outline.id},'web'),{code:'WRITING_CHANGED'});
+  w = await f.store.updateWorkspace(w.id,w.version,'web','goal',v=>({...v,goal:'新的目标'}));
+  await assert.rejects(f.service.create(w.id,{...creation(w,'outline','stale'),writing:paragraph,basisAnalysisId:outline.id},'web'),{code:'ANALYSIS_STALE'});
+  await assert.rejects(f.service.create(w.id,{...creation(w,'outline','missing'),writing:paragraph},'web'),{code:'INVALID_WRITING'});
+});
