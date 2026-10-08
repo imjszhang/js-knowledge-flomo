@@ -171,7 +171,7 @@ export class Store {
 }
 
 function hydrateWorkspace(workspace: Workspace): Workspace {
-  return { ...workspace, goal:workspace.goal ?? '', materialCandidates:workspace.materialCandidates ?? [], collectorMaterials:workspace.collectorMaterials ?? [], decisions:workspace.decisions ?? [], analyses:workspace.analyses ?? [] };
+  return { ...workspace, goal:workspace.goal ?? '', materialCandidates:workspace.materialCandidates ?? [], collectorMaterials:workspace.collectorMaterials ?? [], decisions:workspace.decisions ?? [], analyses:workspace.analyses ?? [], noteDrafts:workspace.noteDrafts ?? [] };
 }
 
 function changeSummary(kind: string): string {

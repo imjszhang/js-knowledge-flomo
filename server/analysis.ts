@@ -199,7 +199,7 @@ export class AnalysisService {
         throw new AppError('ANALYSIS_INPUT_LIMIT',`完整分析材料超过 ${MAX_INPUT_CHARACTERS.toLocaleString()} 字符，请减少选用材料后重试；未截断任何正文`,422);
       const workspace = await this.store.updateWorkspace(id,input.baseVersion,actor,'analysis-created',current => ({...current,analyses:[...(current.analyses ?? []),record]}),input.engine === 'builtin' ? '开始分析选定材料' : '已准备 Codex 分析材料');
       if (input.engine === 'builtin') {
-        const snapshot: Workspace = structuredClone({...initial,draft:'',remote:null,sourceChanged:false,messages:[],analyses:[],decisions:[],materialCandidates:[],
+        const snapshot: Workspace = structuredClone({...initial,draft:'',remote:null,sourceChanged:false,messages:[],analyses:[],noteDrafts:[],decisions:[],materialCandidates:[],
           collectorMaterials:(initial.collectorMaterials ?? []).map(material => ({...material,article:{...material.article,summary:'',digest:''}})),
         });
         this.background(() => this.run(id,record,snapshot));

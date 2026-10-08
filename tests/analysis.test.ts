@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import { AnalysisService } from '../server/analysis.js';
+import { NoteDraftService } from '../server/note-drafts.js';
 import { Store } from '../server/store.js';
 import type { AIProvider, FlomoProvider } from '../server/provider-types.js';
 import type { AnalysisCardInput, AnalysisKind, Memo, MemoSearch, Workspace } from '../shared/contracts.js';
@@ -179,15 +180,17 @@ test('builtin analysis uses sanitized fixed inputs and completion preserves conc
     return '根据材料尚不能得出普遍结论。';
   }});
   t.after(() => gate.resolve());
-  const prepared = await f.service.create(f.workspace.id,{...creation(f.workspace),engine:'builtin'},'web');
+  const withNewDraft = await new NoteDraftService(f.store,f.flomo).create(f.workspace.id,{title:'未发表的新想法',content:'未验证的新判断',baseVersion:1,idempotencyKey:'new-draft'},'web');
+  const prepared = await f.service.create(f.workspace.id,{...creation(withNewDraft),engine:'builtin'},'web');
   await started.promise;
-  assert.equal(captured!.draft,'');assert.deepEqual(captured!.messages,[]);assert.deepEqual(captured!.analyses,[]);
+  assert.equal(captured!.draft,'');assert.deepEqual(captured!.messages,[]);assert.deepEqual(captured!.analyses,[]);assert.deepEqual(captured!.noteDrafts,[]);
   assert.equal(captured!.source.content,f.workspace.source.content);
   await f.store.updateWorkspace(prepared.id,prepared.version,'cli','draft',w => ({...w,draft:'生成时新增的用户草稿'}));
   gate.resolve();await f.service.settle();
   const final = await f.store.getWorkspace(prepared.id);
   assert.equal(final.analyses![0].status,'succeeded');assert.equal(final.analyses![0].sources[0].content,f.workspace.source.content);
   assert.equal(final.draft,'生成时新增的用户草稿');
+  assert.equal(final.noteDrafts![0].content,'未验证的新判断');
   const revisions = await f.store.listDraftRevisions(final.id);
   assert.equal(revisions.length,1);
 });

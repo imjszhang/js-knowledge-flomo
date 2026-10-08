@@ -34,12 +34,15 @@ import {
 } from "lucide-react";
 import type { ActiveContext, Decision, DraftRevision, Job, MaterialCandidate, Memo, Settings, WorkbenchView, Workspace } from "../../shared/contracts";
 import { pinnedTags } from "../../shared/contracts";
-import { api, messageOf, sourceUrl } from "./api";
+import { ApiError, api, messageOf, sourceUrl } from "./api";
 import { useChanges, useDebounce, useDraft } from "./hooks";
 import InlineDiff from "./InlineDiff";
 import Modal from "./Modal";
 import { markdownExcerpt as excerpt } from "./markdown-text";
 import { AnalysisPanel } from "./AnalysisPanel";
+import {AnalysisCardDraft} from "./AnalysisCardDraft";
+import NoteDraftEditor from "./NoteDraftEditor";
+import {useAnalysisInput} from "./analysis-forms";
 import { TopicDiscovery } from "./TopicDiscovery";
 import { CollectorMaterialCard, CollectorSources } from "./CollectorSources";
 
@@ -463,6 +466,9 @@ function Workbench({ workspace, view, onView, aiConfigured, collectorConfigured,
   const client = useQueryClient();
   const editor = useDraft(workspace);
   const [preview, setPreview] = useState(false);
+  const [draftChoice, setDraftChoice] = useAnalysisInput<string>(`flomo:draft-choice:${workspace.id}`, 'source');
+  const newDraftPending = useRef(false);
+  const newDraftAttempt = useRef<{signature:string;version:number;key:string}|null>(null);
   const [materialSearch, setMaterialSearch] = useState(false);
   const [remoteCompare, setRemoteCompare] = useState(false);
   const [error, setError] = useState("");
@@ -493,6 +499,16 @@ function Workbench({ workspace, view, onView, aiConfigured, collectorConfigured,
   const revisions = useQuery({ queryKey: ["revisions", workspace.id], queryFn: () => api.revisions(workspace.id) });
   const activeJobs = jobs.data?.filter((job) => job.status === "running" || job.status === "uncertain") ?? [];
   const latestWorkspace = editor.acknowledged.version > workspace.version ? editor.acknowledged : workspace;
+  const noteDrafts = latestWorkspace.noteDrafts ?? [];
+  const cardDrafts = (latestWorkspace.analyses ?? []).flatMap(record=>record.cards.map(card=>({record,card,key:`card:${record.id}:${card.id}`})));
+  const createdAnnotations = (jobs.data ?? []).filter(job=>job.kind === 'annotation' && job.resultMemo);
+  const activeDraftChoice = draftChoice === 'source' || noteDrafts.some(draft=>`note:${draft.id}` === draftChoice) || cardDrafts.some(item=>item.key === draftChoice) || createdAnnotations.some(job=>`annotation:${job.id}` === draftChoice) ? draftChoice : 'source';
+  const draftsPublishing = noteDrafts.some(draft=>draft.status === 'publishing') || cardDrafts.some(item=>item.card.status === 'publishing');
+  useEffect(()=>{
+    if(!draftsPublishing) return;
+    const timer=setInterval(()=>void client.invalidateQueries({queryKey:['workspace',workspace.id]}),1500);
+    return ()=>clearInterval(timer);
+  },[draftsPublishing,client,workspace.id]);
   const candidates = latestWorkspace.materialCandidates ?? [];
   const selected = latestWorkspace.materials;
   const collectorMaterials = latestWorkspace.collectorMaterials ?? [];
@@ -529,6 +545,32 @@ function Workbench({ workspace, view, onView, aiConfigured, collectorConfigured,
     try { await operation(); }
     catch (error) { setError(messageOf(error)); void client.invalidateQueries({ queryKey: ["workspace", workspace.id] }); }
     finally { setBusy(null); }
+  }
+  async function createNoteDraft(content = '', originAnalysisId?:string) {
+    if(busy || newDraftPending.current) throw new Error('正在保存，请稍后再试。');
+    newDraftPending.current=true;trackInput('new-note-create',true);
+    setBusy('new-note');setError('');
+    try {
+      const saved=await editor.session.flush();
+      const title=content.trim() ? (saved.analyses?.find(record=>record.id === originAnalysisId)?.writing?.claim || excerpt(content,100).split(/[\n。！？]/)[0]).slice(0,60) : '';
+      const input={title,content,originAnalysisId};
+      const signature=JSON.stringify(input);
+      if(newDraftAttempt.current?.signature !== signature) newDraftAttempt.current={signature,version:saved.version,key:crypto.randomUUID()};
+      const attempt=newDraftAttempt.current;
+      const next=await api.createNoteDraft(workspace.id,{...input,baseVersion:attempt.version,idempotencyKey:attempt.key});
+      update(next);
+      const created=next.noteDrafts?.find(draft=>draft.idempotencyKey === attempt.key);
+      if(!created) throw new Error('未能确认新草稿，请刷新列表核对。');
+      newDraftAttempt.current=null;
+      setDraftChoice(`note:${created.id}`);onView('draft');
+    } catch(error) {
+      if(error instanceof ApiError && error.status >= 400 && error.status < 500) newDraftAttempt.current=null;
+      setError(messageOf(error));void client.invalidateQueries({queryKey:['workspace',workspace.id]});throw error;
+    } finally {newDraftPending.current=false;trackInput('new-note-create',false);setBusy(null);}
+  }
+  function applyToSource(content:string,mode:'append'|'replace') {
+    if(mode === 'append') editor.session.append(content);else editor.session.edit(content);
+    setDraftChoice('source');setPreview(false);onView('draft');
   }
   async function preparePublish() {
     await action("preview", async () => {
@@ -604,7 +646,7 @@ function Workbench({ workspace, view, onView, aiConfigured, collectorConfigured,
           <AnnotationComposer workspace={workspace} jobs={jobs.data ?? []} onDirty={(dirty) => trackInput("annotation", dirty)} onCreated={() => void jobs.refetch()}/>
           <div className="next-step"><button className="text-button" onClick={() => onView("materials")}><Layers3 size={15}/>查看相关材料<ArrowRight size={14}/></button>{selectedCount > 0 && <span>已选 {selectedCount} 条</span>}</div>
           {decisions.some((item) => item.answer) && <details className="quiet-disclosure"><summary>已作出的判断 <span>{decisions.filter((item) => item.answer).length}</span></summary>{decisions.filter((item) => item.answer).map((item) => <div key={item.id} className="answered-decision"><strong>{item.question}</strong><p>{item.answer}</p><span>{date(item.answeredAt ?? undefined, true)} · 已共享给 Codex</span></div>)}</details>}
-          <details className="quiet-disclosure"><summary><MessageCircle size={15}/>讨论与补充<span>{workspace.messages.length || ""}</span></summary><ChatPanel onDirty={(dirty) => trackInput("chat", dirty)} workspace={latestWorkspace} aiConfigured={aiConfigured} flush={() => editor.session.flush()} onUpdate={update} onApply={(content, mode) => { if (mode === "append") editor.session.append(content); else editor.session.edit(content); setPreview(false); onView("draft"); }}/></details>
+          <details className="quiet-disclosure"><summary><MessageCircle size={15}/>讨论与补充<span>{workspace.messages.length || ""}</span></summary><ChatPanel onNewDraft={createNoteDraft} onDirty={(dirty) => trackInput("chat", dirty)} workspace={latestWorkspace} aiConfigured={aiConfigured} flush={() => editor.session.flush()} onUpdate={update} onApply={applyToSource}/></details>
           </div>
         </div>
         <div className="materials-view" hidden={view !== "materials"}><div className="section-heading"><h2>本次加工的材料</h2><button className="button secondary small" onClick={() => setMaterialSearch(true)}><Search size={14}/>查找</button></div><p className="section-description">你选用的内容会成为共享上下文。展开原文核对，再决定是否采用。</p>
@@ -615,18 +657,33 @@ function Workbench({ workspace, view, onView, aiConfigured, collectorConfigured,
           {dismissed.length > 0 && <details className="quiet-disclosure"><summary>暂时不用 <span>{dismissed.length}</span></summary>{dismissed.map((item) => materialCard(item.memo, item))}</details>}
         </div>
         <div className="writing-view" hidden={view !== "writing"}>
-          <AnalysisPanel onMaterials={() => onView("materials")} workspace={latestWorkspace} aiConfigured={aiConfigured} disabled={!!busy || !!editor.review || !!editor.conflict} flush={() => { if (goalDirty.current) throw new Error("本次目标尚未保存，请先保存或取消编辑后再分析。"); return editor.session.flush(); }} onUpdate={update} onDirty={(dirty) => trackInput("analysis", dirty)} renderContent={(content) => <Markdown>{content}</Markdown>} onApply={(content, mode) => { if (mode === "append") editor.session.append(content); else editor.session.edit(content); setPreview(false); onView("draft"); }}/>
+          <AnalysisPanel onNewDraft={createNoteDraft} onOpenCard={(analysisId,cardId)=>{setDraftChoice(`card:${analysisId}:${cardId}`);onView("draft");}} onMaterials={() => onView("materials")} workspace={latestWorkspace} aiConfigured={aiConfigured} disabled={!!busy || !!editor.review || !!editor.conflict} flush={() => { if (goalDirty.current) throw new Error("本次目标尚未保存，请先保存或取消编辑后再分析。"); return editor.session.flush(); }} onUpdate={update} onDirty={(dirty) => trackInput("analysis", dirty)} renderContent={(content) => <Markdown>{content}</Markdown>} onApply={applyToSource}/>
         </div>
-        <div className="draft-view" hidden={view !== "draft"}><div className="editor-toolbar"><button className="text-button" onClick={() => onView("writing")}><Sparkles size={14}/>前往写作</button><div className="segmented"><button className={!preview ? "selected" : ""} onClick={() => setPreview(false)}>编辑</button><button className={preview ? "selected" : ""} onClick={() => setPreview(true)}>阅读</button></div></div>
+        <div className="draft-view" hidden={view !== "draft"}>
+          <section className="draft-collection" aria-label="本次笔记与草稿">
+            <div className="section-heading"><div><h2>本次笔记</h2><p className="section-description">在原笔记上继续写，也可以从它出发写成多篇新笔记。</p></div><button className="button secondary small" disabled={!!busy || !!editor.review || !!editor.conflict} onClick={()=>void createNoteDraft().catch(()=>{})}><Plus size={14}/>新笔记草稿</button></div>
+            <nav className="draft-library" aria-label="选择要编辑的笔记">
+              <button className={`draft-library-item ${activeDraftChoice === 'source' ? 'selected' : ''}`} aria-current={activeDraftChoice === 'source' ? 'true' : undefined} onClick={()=>setDraftChoice('source')}><FileText size={15}/><span><strong>当前笔记</strong><small>{excerpt(workspace.title,100)}</small></span><em>{editor.dirty ? '未保存' : '写回原笔记'}</em></button>
+              {noteDrafts.map(draft=><button key={draft.id} className={`draft-library-item ${activeDraftChoice === `note:${draft.id}` ? 'selected' : ''}`} aria-current={activeDraftChoice === `note:${draft.id}` ? 'true' : undefined} onClick={()=>setDraftChoice(`note:${draft.id}`)}><BookOpen size={15}/><span><strong>{draft.title || '未命名的新笔记'}</strong><small>从当前笔记延伸</small></span><em>{dirtyInputs.has(`note-draft:${draft.id}`) ? '未保存' : ({draft:'新草稿',publishing:'创建中',published:'已创建',uncertain:'待核对',failed:'未创建'}[draft.status])}</em></button>)}
+              {cardDrafts.map(({record,card,key})=><button key={key} className={`draft-library-item ${activeDraftChoice === key ? 'selected' : ''}`} aria-current={activeDraftChoice === key ? 'true' : undefined} onClick={()=>setDraftChoice(key)}><Layers3 size={15}/><span><strong>{card.title}</strong><small>由分析提炼的卡片</small></span><em>{dirtyInputs.has(key) ? '未保存' : ({draft:'候选卡片',publishing:'创建中',published:'已创建',uncertain:'待核对',failed:'未创建'}[card.status])}</em></button>)}
+              {createdAnnotations.map(job=><button key={job.id} className={`draft-library-item ${activeDraftChoice === `annotation:${job.id}` ? 'selected' : ''}`} aria-current={activeDraftChoice === `annotation:${job.id}` ? 'true' : undefined} onClick={()=>setDraftChoice(`annotation:${job.id}`)}><MessageCircle size={15}/><span><strong>{excerpt(job.resultMemo!.content,80)}</strong><small>基于当前笔记的批注</small></span><em>{job.status === 'succeeded' ? '已创建' : '待核对'}</em></button>)}
+            </nav>
+            {!noteDrafts.length && !cardDrafts.length && <p className="scope-notice">还没有新笔记草稿。点击“新笔记草稿”，或将写作结果另存为新笔记。</p>}
+          </section>
+          <div hidden={activeDraftChoice !== 'source'} className="source-draft-editor"><div className="draft-target-heading"><h3>当前笔记的草稿</h3><span>确认写回后更新原笔记</span></div><div className="editor-toolbar"><button className="text-button" onClick={() => onView("writing")}><Sparkles size={14}/>前往写作</button><div className="segmented"><button className={!preview ? "selected" : ""} onClick={() => setPreview(false)}>编辑</button><button className={preview ? "selected" : ""} onClick={() => setPreview(true)}>阅读</button></div></div>
           <ErrorBox error={editor.error} retry={editor.error ? () => void editor.session.flush().catch(() => {}) : undefined}/>
           {preview ? <div className="draft-preview"><Markdown>{editor.draft || "草稿还没有内容。"}</Markdown></div> : <textarea className="draft-editor" aria-label="工作草稿" value={editor.draft} onChange={(event) => editor.session.edit(event.target.value)} spellCheck={false} placeholder="写下自己的判断，或让 Codex 把讨论结果整理到这里。"/>}
           <div className="editor-footer"><span>{editor.draft.length.toLocaleString()} 字符 · Markdown</span></div>
           <details className="quiet-disclosure revision-history"><summary><Clock3 size={15}/>草稿修改记录 <span>{revisions.data?.length ?? 0}</span></summary><ErrorBox error={revisions.error} retry={() => void revisions.refetch()}/>{revisions.data?.length ? revisions.data.map((revision) => <button className="revision-row" key={revision.id} onClick={() => setRevisionOpen(revision)}><span><strong>{revision.summary || "更新了草稿"}</strong><small>{revision.actor === "web" ? "你在工作台" : "Codex / 外部助手"} · {date(revision.createdAt, true)} · v{revision.toVersion}</small></span><ArrowRight size={14}/></button>) : <p className="scope-notice">草稿修改后，会在这里保留版本和具体变化。</p>}</details>
+          </div>
+          {noteDrafts.map(draft=><div key={draft.id} hidden={activeDraftChoice !== `note:${draft.id}`}><NoteDraftEditor workspace={latestWorkspace} draft={draft} disabled={!!busy || !!editor.review || !!editor.conflict} flush={()=>editor.session.flush()} onUpdate={update} onDirty={dirty=>trackInput(`note-draft:${draft.id}`,dirty)} renderContent={content=><Markdown>{content}</Markdown>}/></div>)}
+          {cardDrafts.map(({record,card,key})=><div key={key} hidden={activeDraftChoice !== key}><AnalysisCardDraft workspace={latestWorkspace} record={record} card={card} disabled={!!busy || !!editor.review || !!editor.conflict} flush={()=>editor.session.flush()} onUpdate={update} onDirty={dirty=>trackInput(key,dirty)} renderContent={content=><Markdown>{content}</Markdown>}/></div>)}
+          {createdAnnotations.map(job=><section key={job.id} hidden={activeDraftChoice !== `annotation:${job.id}`} className="note-draft-editor"><div className="section-heading"><h3>已创建的批注笔记</h3><MemoLink memo={job.resultMemo!}>在 flomo 查看</MemoLink></div><div className="draft-preview"><Markdown>{job.resultMemo!.content}</Markdown></div></section>)}
         </div>
         {!!jobs.data?.some((job) => !activeJobs.some((active) => active.id === job.id)) && <details className="quiet-disclosure task-history"><summary>已完成和失败的任务</summary><JobList jobs={jobs.data.filter((job) => !activeJobs.some((active) => active.id === job.id))} onAbandon={setAbandonJob} onReconcile={() => {}}/></details>}
         <ErrorBox error={jobs.error} retry={() => void jobs.refetch()}/>
       </div>
-      {view === "draft" && <footer className="draft-actionbar"><div><strong className={editor.error ? "error" : ""}>{editor.saving ? <Loader2 size={13} className="spin"/> : !editor.dirty && !editor.review && !editor.conflict ? <CheckCheck size={14}/> : <Circle size={8}/>} {saveStatus}</strong><span>确认写回后才会更新 flomo</span></div><button className="button primary" disabled={!!busy || !!editor.conflict || !!editor.review || activeJobs.some((job) => job.kind === "publish")} onClick={() => void preparePublish()}>{busy === "preview" ? <Loader2 size={14} className="spin"/> : <ArrowUpRight size={15}/>}预览写回</button></footer>}
+      {view === "draft" && activeDraftChoice === "source" && <footer className="draft-actionbar"><div><strong className={editor.error ? "error" : ""}>{editor.saving ? <Loader2 size={13} className="spin"/> : !editor.dirty && !editor.review && !editor.conflict ? <CheckCheck size={14}/> : <Circle size={8}/>} {saveStatus}</strong><span>确认写回后才会更新 flomo</span></div><button className="button primary" disabled={!!busy || !!editor.conflict || !!editor.review || activeJobs.some((job) => job.kind === "publish")} onClick={() => void preparePublish()}>{busy === "preview" ? <Loader2 size={14} className="spin"/> : <ArrowUpRight size={15}/>}预览写回</button></footer>}
       {reviewOpen && (editor.review || editor.conflict) && <Modal title={editor.conflict ? "选择要继续的草稿" : "查看另一端的草稿更新"} wide onClose={() => setReviewOpen(false)}><p className="modal-description">{editor.conflict ? "删除标记对应你的当前输入，新增标记对应另一端内容。你的输入仍保留在编辑器中，可关闭此窗口手动合并。" : "这里显示从当前草稿到新版本的变化；采用后才会更新编辑区。"}</p><InlineDiff before={editor.draft} after={(editor.conflict ?? editor.review)!.draft}/><div className="modal-actions"><button className="button secondary" onClick={() => setReviewOpen(false)}>暂不处理</button>{editor.conflict ? <><button className="button secondary" onClick={() => { editor.session.resolve("local"); setReviewOpen(false); }}>保留我的输入并保存</button><button className="button primary" onClick={() => { editor.session.resolve("server"); setReviewOpen(false); onView("draft"); }}>采用另一端版本</button></> : <button className="button primary" onClick={() => { editor.session.acceptReview(); setReviewOpen(false); onView("draft"); }}>采用新版本</button>}</div></Modal>}
       {revisionOpen && <Modal title={restoreTarget ? `还原到 v${restoreTarget.version}` : "草稿改动"} wide onClose={() => { if (!busy) {setRevisionOpen(null); setRestoreTarget(null);} }}>
         {restoreTarget ? <><p className="modal-description">以下比较当前草稿与目标版本。确认后会先保存当前编辑，再将旧版内容保存为新的修改记录；不会写回 flomo。</p><InlineDiff before={editor.draft} after={restoreTarget.content}/><ErrorBox error={error}/><div className="modal-actions"><button className="button secondary" disabled={!!busy} onClick={() => setRestoreTarget(null)}>返回版本记录</button><button className="button primary" disabled={!!busy || !!editor.review || !!editor.conflict} onClick={() => void action("restore", async () => {await editor.session.flush(); editor.session.edit(restoreTarget.content); await editor.session.flush(); await revisions.refetch(); setRevisionOpen(null); setRestoreTarget(null); onView("draft");})}>{busy === "restore" ? "正在还原…" : "确认还原"}</button></div>{(editor.review || editor.conflict) && <p className="notice">请先关闭窗口，处理另一端的草稿更新，再还原。</p>}</> : <><p className="modal-description">{revisionOpen.summary || "更新草稿"} · {date(revisionOpen.createdAt, true)} · v{revisionOpen.fromVersion} → v{revisionOpen.toVersion}</p><InlineDiff before={revisionOpen.before} after={revisionOpen.after}/><div className="modal-actions"><button className="button secondary" onClick={() => {setError(""); setRestoreTarget({version:revisionOpen.fromVersion,content:revisionOpen.before});}}>还原到修改前 v{revisionOpen.fromVersion}</button><button className="button primary" onClick={() => {setError(""); setRestoreTarget({version:revisionOpen.toVersion,content:revisionOpen.after});}}>还原到此版本 v{revisionOpen.toVersion}</button></div></>}
@@ -858,12 +915,14 @@ function ChatPanel({
   flush,
   onUpdate,
   onApply,
+  onNewDraft,
 }: {
   workspace: Workspace;
   aiConfigured: boolean;
   flush: () => Promise<Workspace>;
   onUpdate: (workspace: Workspace) => void;
   onApply: (content: string, mode: "append" | "replace") => void;
+  onNewDraft: (content:string)=>Promise<void>;
   onDirty: (dirty: boolean) => void;
 }) {
   const client = useQueryClient();
@@ -1026,31 +1085,35 @@ function ChatPanel({
         </div>
       </form>
       {applyMessage && (
-        <Modal title="将回答用于草稿" onClose={() => setApplyMessage(null)}>
+        <Modal title="将回答用于草稿" onClose={() => {if(!busy)setApplyMessage(null);}}>
           <p className="modal-description">
-            选择追加到当前草稿，或用这段回答替换草稿。更改会自动保存到工作台。
+            选择补充当前笔记，或独立保存为新笔记草稿。
           </p>
           <div className="apply-preview">
             <Markdown>{applyMessage}</Markdown>
           </div>
+          <ErrorBox error={error}/>
           <div className="modal-actions">
+            <button className="button primary" disabled={busy} onClick={()=>{setBusy(true);setError('');void onNewDraft(applyMessage).then(()=>setApplyMessage(null)).catch(error=>setError(messageOf(error))).finally(()=>setBusy(false));}}>另存为新笔记草稿</button>
             <button
+              disabled={busy}
               className="button secondary"
               onClick={() => {
                 onApply(applyMessage, "append");
                 setApplyMessage(null);
               }}
             >
-              追加到草稿
+              追加到当前笔记
             </button>
             <button
-              className="button primary"
+              className="button secondary"
+              disabled={busy}
               onClick={() => {
                 onApply(applyMessage, "replace");
                 setApplyMessage(null);
               }}
             >
-              替换当前草稿
+              替换当前笔记草稿
             </button>
           </div>
         </Modal>

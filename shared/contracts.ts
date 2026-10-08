@@ -75,6 +75,24 @@ export interface AnalysisSource {
   createdAt: string;
   updatedAt: string;
 }
+export interface NoteDraft {
+  id: string;
+  title: string;
+  content: string;
+  sources: AnalysisSource[];
+  originAnalysisId?: string;
+  status: 'draft' | 'publishing' | 'published' | 'uncertain' | 'failed';
+  resultMemo?: Memo;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+  actor: Actor;
+  idempotencyKey: string;
+  requestHash: string;
+  publicationKey?: string;
+  publicationHash?: string;
+  publicationActor?: Actor;
+}
 export interface AnalysisCardInput {
   title: string;
   body: string;
@@ -158,6 +176,7 @@ export interface Workspace {
   materialCandidates?: MaterialCandidate[];
   decisions?: Decision[];
   analyses?: AnalysisRecord[];
+  noteDrafts?: NoteDraft[];
 }
 export interface Change {
   id: number;
@@ -218,6 +237,12 @@ export const sourceAttachSchema = z.object({ articleId:z.string().min(1).max(500
 export const messageSchema = z.object({ role: z.enum(['user', 'assistant']), content: z.string().min(1).max(100_000), baseVersion: versionSchema }).strict();
 export const aiSchema = z.object({ prompt: z.string().min(1).max(30_000), baseVersion: versionSchema, idempotencyKey: z.string().min(1).max(200) }).strict();
 export const publishSchema = z.object({ baseVersion: versionSchema, idempotencyKey: z.string().min(1).max(200) }).strict();
+export const noteDraftCreateSchema = z.object({
+  title:z.string().trim().max(200).default(''), content:z.string().max(100_000).default(''),
+  baseVersion:versionSchema, idempotencyKey:z.string().min(1).max(200), originAnalysisId:z.string().min(1).optional(),
+}).strict();
+export const noteDraftUpdateSchema = z.object({title:z.string().trim().max(200),content:z.string().max(100_000),baseVersion:versionSchema}).strict();
+export const noteDraftPublishSchema = publishSchema;
 export const settingsSchema = z.object({ pinnedTags: z.array(z.string().min(1).max(100)).min(1).max(20), refreshSeconds: z.union([z.literal(0), z.number().int().min(30).max(3600)]) }).strict();
 export const contextSchema = z.object({ workspaceId:z.string().min(1).nullable(), view:z.enum(['note','materials','writing','draft']), baseRevision:z.number().int().nonnegative() }).strict();
 export const goalSchema = z.object({ goal:z.string().max(5000), baseVersion:versionSchema }).strict();

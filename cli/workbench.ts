@@ -3,7 +3,7 @@ import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { analysisCardPublishSchema, analysisCardUpdateSchema, analysisCreateSchema, analysisResultSchema, candidateChoiceSchema, candidatesSchema, contextSchema, decisionSchema, discoverySchema, sourceAttachSchema, type ActiveContext, type Actor, type Change, type Workspace } from '../shared/contracts.js';
+import { analysisCardPublishSchema, analysisCardUpdateSchema, analysisCreateSchema, analysisResultSchema, candidateChoiceSchema, candidatesSchema, contextSchema, decisionSchema, discoverySchema, noteDraftCreateSchema, noteDraftPublishSchema, noteDraftUpdateSchema, sourceAttachSchema, type ActiveContext, type Actor, type Change, type Workspace } from '../shared/contracts.js';
 
 export class WorkbenchError extends Error {
   constructor(public readonly code: string, message: string, public readonly exitCode = 1, public readonly details?: unknown) {
@@ -176,6 +176,9 @@ const usage = `flomo workbench CLI (requires the local service)
   draft update ID (--file PATH | --stdin | --text TEXT) --base-version N [--summary TEXT]
   draft diff ID | draft history ID
   draft publish ID --expected-version N --idempotency-key KEY
+  note-draft create ID --file PATH --base-version N --idempotency-key KEY [--basis ANALYSIS_ID]
+  note-draft update ID --note-draft DRAFT_ID --file PATH --base-version N
+  note-draft publish ID --note-draft DRAFT_ID --base-version N --idempotency-key KEY
   material set ID --memo ID1,ID2 --base-version N
   material propose ID --file PATH --base-version N
   material decide ID --memo ID --status selected|dismissed|proposed --base-version N
@@ -210,6 +213,9 @@ material discover searches each comma/newline-separated term and proposes full n
 analysis complete reads {text, cards?}; card-update reads {title, body, tags, sourceKeys}.
 external analyses prepare sources and instructions for an agent; saving a result does not publish cards.
 card-publish creates a new flomo note after review; check analysis get until its card is published.
+note-draft create/update read {title, content} from a JSON file and save local derived notes.
+workspace get includes noteDrafts; note-draft publish explicitly creates a NEW flomo note with source links.
+Check workspace get until the note draft is published; uncertain outcomes need manual verification in flomo.
 FLOMO_WORKBENCH_URL defaults to http://127.0.0.1:3000.
 Exit codes: 0 success; 1 service error; 2 invalid input; 3 version conflict; 4 service unavailable.
 Reuse an idempotency key only when retrying the exact same AI/publish operation.
@@ -227,7 +233,7 @@ const optionTypes: Record<string, { type: 'string' | 'boolean' }> = {
   status: { type: 'string' }, decision: { type: 'string' }, 'context-revision': { type: 'string' },
   article: { type: 'string' },
   terms: { type: 'string' }, kind: { type: 'string' }, engine: { type: 'string' }, question: { type: 'string' },
-  basis: { type: 'string' }, analysis: { type: 'string' }, card: { type: 'string' },
+  basis: { type: 'string' }, analysis: { type: 'string' }, card: { type: 'string' }, 'note-draft': { type: 'string' },
 };
 
 const commandOptions: Record<string, { flags: string[]; id?: boolean }> = {
@@ -242,6 +248,9 @@ const commandOptions: Record<string, { flags: string[]; id?: boolean }> = {
   'draft update': { flags: ['file', 'stdin', 'text', 'base-version', 'summary'], id: true }, 'draft diff': { flags: [], id: true },
   'draft history': { flags: [], id: true },
   'draft publish': { flags: ['expected-version', 'idempotency-key'], id: true },
+  'note-draft create': { flags: ['file', 'basis', 'base-version', 'idempotency-key'], id: true },
+  'note-draft update': { flags: ['note-draft', 'file', 'base-version'], id: true },
+  'note-draft publish': { flags: ['note-draft', 'base-version', 'idempotency-key'], id: true },
   'material set': { flags: ['memo', 'base-version'], id: true },
   'material propose': { flags: ['file', 'base-version'], id: true },
   'material decide': { flags: ['memo', 'status', 'base-version'], id: true },
@@ -263,7 +272,7 @@ const commandOptions: Record<string, { flags: string[]; id?: boolean }> = {
   'changes list': { flags: ['after'] }, 'changes watch': { flags: ['after'] },
   'settings get': { flags: [] }, 'settings set': { flags: ['file'] }, 'service status': { flags: [] },
 };
-for (const command of ['annotation create', 'workspace refresh', 'workspace rebase', 'workspace goal', 'draft update', 'draft publish', 'material set', 'material propose', 'material decide', 'material discover', 'analysis create', 'analysis complete', 'analysis card-update', 'analysis card-publish', 'source attach', 'source detach', 'decision add', 'decision answer', 'message add', 'ai run']) {
+for (const command of ['annotation create', 'workspace refresh', 'workspace rebase', 'workspace goal', 'draft update', 'draft publish', 'note-draft create', 'note-draft update', 'note-draft publish', 'material set', 'material propose', 'material decide', 'material discover', 'analysis create', 'analysis complete', 'analysis card-update', 'analysis card-publish', 'source attach', 'source detach', 'decision add', 'decision answer', 'message add', 'ai run']) {
   commandOptions[command]!.flags.push('context-revision');
 }
 
@@ -290,7 +299,7 @@ export async function runCli(args: string[], io: CliIO = defaultIO, suppliedClie
     const command = `${group} ${action}`;
     const spec = commandOptions[command];
     if (!spec || positionals.length !== (spec.id ? 3 : 2)) throw new WorkbenchError('INVALID_COMMAND', 'Unknown command or incorrect positional arguments. Run with --help.', 2);
-    if ((group === 'source' || group === 'analysis' || command === 'material discover') && !id?.trim()) throw new WorkbenchError('INVALID_ARGUMENT', 'A nonempty workspace or article ID is required.', 2);
+    if ((group === 'source' || group === 'analysis' || group === 'note-draft' || command === 'material discover') && !id?.trim()) throw new WorkbenchError('INVALID_ARGUMENT', 'A nonempty workspace or article ID is required.', 2);
     for (const key of Object.keys(values)) {
       if (key !== 'json' && !spec.flags.includes(key)) throw new WorkbenchError('INVALID_ARGUMENT', `Option --${key} does not apply to ${command}.`, 2);
     }
@@ -348,6 +357,32 @@ export async function runCli(args: string[], io: CliIO = defaultIO, suppliedClie
       case 'draft diff': result = await client.diff(id!); break;
       case 'draft history': result = await workspaceRequest('GET', '/revisions'); break;
       case 'draft publish': result = await workspaceRequest('POST', '/publish', { baseVersion: integer('expected-version'), idempotencyKey: string('idempotency-key', true) }); break;
+      case 'note-draft create':
+      case 'note-draft update': {
+        const noteDraftId = command === 'note-draft update' ? string('note-draft', true)! : undefined;
+        if (noteDraftId !== undefined && !noteDraftId.trim()) throw new WorkbenchError('INVALID_ARGUMENT', '--note-draft must be a nonempty draft ID.', 2);
+        const file = await jsonFile();
+        if (!file || typeof file !== 'object' || Array.isArray(file) || Object.keys(file).some(key => key !== 'title' && key !== 'content')) throw new WorkbenchError('INVALID_ARGUMENT', 'Note draft file must contain only {title, content}; supply version, idempotency key and optional analysis basis separately.', 2);
+        const input = { ...file, baseVersion: integer('base-version') };
+        if (command === 'note-draft create') {
+          const parsed = noteDraftCreateSchema.safeParse({ ...input, idempotencyKey: string('idempotency-key', true), originAnalysisId: string('basis') });
+          if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', 'Use a title up to 200 characters, content up to 100000 characters, and an idempotency key of 1 to 200 characters.', 2);
+          result = await workspaceRequest('POST', '/note-drafts', parsed.data);
+        } else {
+          const parsed = noteDraftUpdateSchema.safeParse(input);
+          if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', 'Note draft file requires title (up to 200 characters) and content (up to 100000 characters).', 2);
+          result = await workspaceRequest('PATCH', `/note-drafts/${encodeURIComponent(noteDraftId!)}`, parsed.data);
+        }
+        break;
+      }
+      case 'note-draft publish': {
+        const noteDraftId = string('note-draft', true)!;
+        if (!noteDraftId.trim()) throw new WorkbenchError('INVALID_ARGUMENT', '--note-draft must be a nonempty draft ID.', 2);
+        const parsed = noteDraftPublishSchema.safeParse({ baseVersion: integer('base-version'), idempotencyKey: string('idempotency-key', true) });
+        if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', '--idempotency-key must contain 1 to 200 characters.', 2);
+        result = await workspaceRequest('POST', `/note-drafts/${encodeURIComponent(noteDraftId)}/publish`, parsed.data);
+        break;
+      }
       case 'material set': {
         const memoIds = string('memo');
         if (memoIds === undefined) throw new WorkbenchError('INVALID_ARGUMENT', '--memo is required; pass an empty string to remove all flomo materials.', 2);

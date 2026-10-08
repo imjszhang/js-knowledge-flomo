@@ -88,6 +88,12 @@ export const api = {
     mutation<Workspace>(`/workspaces/${encodeURIComponent(id)}/analyses/${encodeURIComponent(analysisId)}/cards/${encodeURIComponent(cardId)}`, input, "PATCH"),
   publishAnalysisCard: (id: string, analysisId: string, cardId: string, baseVersion: number, idempotencyKey: string) =>
     mutation<Workspace>(`/workspaces/${encodeURIComponent(id)}/analyses/${encodeURIComponent(analysisId)}/cards/${encodeURIComponent(cardId)}/publish`, {baseVersion, idempotencyKey}),
+  createNoteDraft: (id:string, input:{title:string;content:string;baseVersion:number;idempotencyKey:string;originAnalysisId?:string}) =>
+    mutation<Workspace>(`/workspaces/${encodeURIComponent(id)}/note-drafts`,input),
+  saveNoteDraft: (id:string,draftId:string,input:{title:string;content:string;baseVersion:number}) =>
+    mutation<Workspace>(`/workspaces/${encodeURIComponent(id)}/note-drafts/${encodeURIComponent(draftId)}`,input,'PATCH'),
+  publishNoteDraft: (id:string,draftId:string,baseVersion:number,idempotencyKey:string) =>
+    mutation<Workspace>(`/workspaces/${encodeURIComponent(id)}/note-drafts/${encodeURIComponent(draftId)}/publish`,{baseVersion,idempotencyKey}),
   goal: (id: string, goal: string, baseVersion: number) =>
     mutation<Workspace>(`/workspaces/${id}/goal`, { goal, baseVersion }, "PATCH"),
   chooseCandidate: (id: string, memoId: string, status: MaterialCandidate["status"], baseVersion: number) =>

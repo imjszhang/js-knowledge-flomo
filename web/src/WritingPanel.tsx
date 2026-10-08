@@ -14,7 +14,7 @@ const stepDescriptions = {
 export function WritingPanel({workspace, aiConfigured, disabled, flush, onUpdate, onMaterials, onBusy, onPreview, renderContent}: {
   workspace:Workspace; aiConfigured:boolean; disabled:boolean; flush:()=>Promise<Workspace>;
   onBusy:(busy:boolean)=>void; onUpdate:(workspace:Workspace)=>void; onMaterials:()=>void;
-  onPreview:(content:string)=>void; renderContent:(text:string)=>ReactNode;
+  onPreview:(content:string, originAnalysisId?:string)=>void; renderContent:(text:string)=>ReactNode;
 }) {
   const [form,setForm] = useAnalysisInput<WritingInput>(`flomo:writing:${workspace.id}`, {stage:'questions',claim:'',audience:'',answers:'',structure:'direct',outline:'',section:''});
   const [basisId,setBasisId] = useAnalysisInput<string>(`flomo:writing-basis:${workspace.id}`, '');
@@ -86,7 +86,7 @@ export function WritingPanel({workspace, aiConfigured, disabled, flush, onUpdate
           {!outlines.length && <p className="scope-notice">还没有可用的提纲，先到“组织提纲”生成一份。</p>}
           {basis && <><label>核对并编辑提纲<textarea rows={7} maxLength={20000} value={form.outline} onChange={e=>change({outline:e.target.value})}/></label><label>这次展开哪一段<textarea rows={2} maxLength={2000} value={form.section} onChange={e=>change({section:e.target.value})} placeholder="填写提纲中的段落标题，或说明这一段想讲清楚什么"/></label>{requirementsChanged && <p className="notice">写作要求已变化，请回到“组织提纲”重新生成。</p>}{analysisIsStale(basis,workspace) && <p className="notice">材料或目标已变化，请回到“组织提纲”重新生成。</p>}</>}
           <div className="analysis-actions"><button type="button" className="button primary small" disabled={!basis || requirementsChanged || analysisIsStale(basis,workspace) || !form.outline.trim() || !form.section.trim()} onClick={()=>void run('paragraph')}>{engine === 'external' ? '确认提纲，交给 Codex 展开' : '确认提纲并展开这一段'}</button></div>
-          {latestResult && <WritingResult record={latestResult} workspace={workspace} renderContent={renderContent}>{latestResult.status === 'succeeded' && <button type="button" className="button primary small" onClick={()=>onPreview(latestResult.output)}>预览加入草稿</button>}</WritingResult>}
+          {latestResult && <WritingResult record={latestResult} workspace={workspace} renderContent={renderContent}>{latestResult.status === 'succeeded' && <button type="button" className="button primary small" onClick={()=>onPreview(latestResult.output,latestResult.id)}>预览加入草稿</button>}</WritingResult>}
           <div className="writing-step-footer"><button type="button" className="text-button subdued" onClick={()=>changeStep('outline')}>上一步：组织提纲</button><span>先预览核对，再追加到草稿。</span></div>
         </>}
       </fieldset>
