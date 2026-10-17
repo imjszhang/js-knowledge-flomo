@@ -2,7 +2,6 @@ import {
   useEffect,
   useRef,
   useState,
-  type FormEvent,
   type ReactNode,
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -45,9 +44,11 @@ import NoteDraftEditor from "./NoteDraftEditor";
 import {useAnalysisInput} from "./analysis-forms";
 import { TopicDiscovery } from "./TopicDiscovery";
 import { CollectorMaterialCard, CollectorSources } from "./CollectorSources";
+import { NoteLinkDialog, NoteLinksPanel } from "./NoteLinks";
+import { DiscussionPanel } from "./DiscussionPanel";
 
 type LeaveGuard = () => Promise<unknown>;
-const viewLabels: Record<WorkbenchView, string> = { note: "笔记", materials: "材料", writing: "写作", draft: "草稿" };
+const viewLabels: Record<WorkbenchView, string> = { note: "笔记", materials: "材料", discussion: "讨论", writing: "写作", draft: "草稿" };
 
 function date(value: string | undefined, detailed = false) {
   if (!value) return "尚未检查";
@@ -470,6 +471,10 @@ function Workbench({ workspace, view, onView, aiConfigured, collectorConfigured,
   const newDraftPending = useRef(false);
   const newDraftAttempt = useRef<{signature:string;version:number;key:string}|null>(null);
   const [materialSearch, setMaterialSearch] = useState(false);
+  const [linkDialog, setLinkDialog] = useState<{target?:Memo} | null>(null);
+  const [discoveryNotice, setDiscoveryNotice] = useState("");
+  const [discoveryOpen, setDiscoveryOpen] = useState(() => !(workspace.materialCandidates?.length || workspace.materials.length || workspace.collectorMaterials?.length));
+  const [materialFilter, setMaterialFilter] = useState<"proposed" | "selected" | "dismissed">(() => (workspace.materialCandidates ?? []).some(item => item.status === "proposed") || !workspace.materials.length && !workspace.collectorMaterials?.length ? "proposed" : "selected");
   const [remoteCompare, setRemoteCompare] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -496,8 +501,17 @@ function Workbench({ workspace, view, onView, aiConfigured, collectorConfigured,
   }, []);
   const checkedOnOpen = useRef(false);
   const jobs = useQuery({ queryKey: ["jobs", workspace.id], queryFn: () => api.jobs(workspace.id), refetchInterval: (query) => query.state.data?.some((job) => job.status === "running") ? 1500 : false });
+  const linkJobs = useQuery({ queryKey: ["jobs", "links", workspace.id], queryFn: () => api.links(workspace.id), refetchInterval: query => query.state.data?.some(job => job.status === "running") ? 1500 : false });
+  const pendingLinks = (linkJobs.data ?? []).filter(job => job.status === "running" || job.status === "uncertain");
+  const discoveryCompletions = jobs.data?.filter(job => job.kind === "discovery" && job.status === "succeeded").map(job => `${job.id}:${job.updatedAt}`).sort().join("|");
+  useEffect(() => {
+    if (!discoveryCompletions) return;
+    void client.invalidateQueries({queryKey:["workspace",workspace.id]});
+    void client.invalidateQueries({queryKey:["workspaces"]});
+  }, [discoveryCompletions, client, workspace.id]);
   const revisions = useQuery({ queryKey: ["revisions", workspace.id], queryFn: () => api.revisions(workspace.id) });
-  const activeJobs = jobs.data?.filter((job) => job.status === "running" || job.status === "uncertain") ?? [];
+  const activeJobs = jobs.data?.filter((job) => job.kind !== "link" && (view !== "discussion" || job.kind !== "ai") && (job.status === "running" || job.status === "uncertain")) ?? [];
+  const historyJobs = (jobs.data ?? []).filter(job => job.kind !== "link" && (view !== "discussion" || job.kind !== "ai") && (job.status === "succeeded" || job.status === "failed"));
   const latestWorkspace = editor.acknowledged.version > workspace.version ? editor.acknowledged : workspace;
   const noteDrafts = latestWorkspace.noteDrafts ?? [];
   const cardDrafts = (latestWorkspace.analyses ?? []).flatMap(record=>record.cards.map(card=>({record,card,key:`card:${record.id}:${card.id}`})));
@@ -515,6 +529,9 @@ function Workbench({ workspace, view, onView, aiConfigured, collectorConfigured,
   const selectedCount = selected.length + collectorMaterials.length;
   const proposed = candidates.filter((item) => item.status === "proposed");
   const dismissed = candidates.filter((item) => item.status === "dismissed");
+  const discoveryJobs = (jobs.data ?? []).filter(job => job.kind === "discovery").sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const discoveryRunning = discoveryJobs.some(job => job.status === "running");
+  const latestDiscovery = discoveryJobs[0];
   const decisions = latestWorkspace.decisions ?? [];
   const pendingDecisions = decisions.filter((item) => !item.answer);
   const decisionsToReview = decisions.filter((item) => !item.answer || dirtyInputs.has(`decision:${item.id}`));
@@ -529,7 +546,7 @@ function Workbench({ workspace, view, onView, aiConfigured, collectorConfigured,
     return () => setGuard(null);
   }, [editor.session]);
   useEffect(() => {
-    if (checkedOnOpen.current || !jobs.isSuccess || jobs.data.some((job) => job.kind === "publish" && (job.status === "running" || job.status === "uncertain"))) return;
+    if (checkedOnOpen.current || !jobs.isSuccess || jobs.data.some((job) => (["publish","link"].includes(job.kind) && (job.status === "running" || job.status === "uncertain")) || (job.kind === "discovery" && job.status === "running"))) return;
     checkedOnOpen.current = true;
     if (Date.now() - Date.parse(workspace.lastCheckedAt) <= 60_000) return;
     void api.refresh(workspace.id).then(update).catch((error) => setError(`检查 flomo 更新失败，已保留本地内容：${messageOf(error)}`));
@@ -613,11 +630,16 @@ function Workbench({ workspace, view, onView, aiConfigured, collectorConfigured,
   }
   function materialCard(memo: Memo, candidate?: MaterialCandidate) {
     const status = candidate?.status ?? "selected";
+    const firstLine = excerpt(memo.content, 600).split("\n").map(line => line.trim()).find(line => line && !/^#\S+(\s+#\S+)*$/.test(line)) || "未命名材料";
+    const title = firstLine.replace(/^\*{1,2}|\*{1,2}$/g, "");
+    const reason = candidate?.reason.replace(/^AI\s*推荐[：:]\s*/, "");
+    const linked = (latestWorkspace.remote ?? latestWorkspace.source).linked_memos.includes(memo.id) || memo.linked_memos.includes(workspace.memoId);
     return <article className={`context-card ${status}`} key={memo.id}>
       <div className="material-meta"><span className={`relation-chip ${candidate?.relation ?? "background"}`}>{candidate ? relationLabels[candidate.relation] : "参考材料"}</span><span>{date(memo.created_at)}</span>{status === "selected" && <span className="selected-label"><Check size={12}/>已选用</span>}</div>
-      <details className="material-reading"><summary><span className="material-excerpt">{excerpt(memo.content, 180) || "查看材料原文"}</span><span className="expand-label"><span className="when-collapsed">展开原文</span><span className="when-expanded">收起原文</span><ChevronDown size={12}/></span></summary><Markdown>{memo.content}</Markdown>{memo.content_truncated && <p className="scope-notice">此材料尚未读取完整，请在 flomo 中核对原文。</p>}<MemoLink memo={memo}/></details>
-      {candidate?.reason && <p className="material-reason"><span>推荐理由</span>{candidate.reason}</p>}
-      <div className="material-actions">{status === "selected" ? <button className="text-button subdued" disabled={!!busy} onClick={() => void chooseMaterial(memo, "dismissed")}>移出本次材料</button> : <><button className="button secondary small" disabled={!!busy} onClick={() => void chooseMaterial(memo, "selected")}><Plus size={13}/>用于这次加工</button>{status === "proposed" && <button className="text-button subdued" disabled={!!busy} onClick={() => void chooseMaterial(memo, "dismissed")}>暂时不用</button>}</>}</div>
+      <h3 className="material-title">{title.length > 100 ? `${title.slice(0, 100)}…` : title}</h3>
+      {reason ? <details className="material-reason-disclosure"><summary><span className="material-reason-preview">{reason}</span><span className="reason-toggle"><span className="reason-closed">展开关联理由</span><span className="reason-open">收起关联理由</span><ChevronDown size={12}/></span></summary><p>{reason}</p></details> : <p className="material-preview">{excerpt(memo.content, 150)}</p>}
+      <details className="material-reading compact-reading"><summary><span className="expand-label"><BookOpen size={13}/><span className="when-collapsed">阅读原文</span><span className="when-expanded">收起原文</span><ChevronDown size={12}/></span></summary><Markdown>{memo.content}</Markdown>{memo.content_truncated && <p className="scope-notice">此材料尚未读取完整，请在 flomo 中核对原文。</p>}<MemoLink memo={memo}/></details>
+      <div className="material-actions"><button className="text-button" disabled={!!busy} title={linked ? "查看或补充笔记之间的引用" : "预览并将链接写入 flomo 笔记"} onClick={() => setLinkDialog({target:memo})}><Link2 size={13}/>{linked ? "已关联" : "建立关联"}</button>{status === "selected" ? <button className="text-button subdued" disabled={!!busy} onClick={() => void chooseMaterial(memo, "dismissed")}>移出材料</button> : <>{status === "proposed" && <button className="text-button subdued" disabled={!!busy} onClick={() => void chooseMaterial(memo, "dismissed")}>暂时不用</button>}<button className="button secondary small select-material" disabled={!!busy} onClick={() => void chooseMaterial(memo, "selected")}><Plus size={13}/>选用</button></>}</div>
     </article>;
   }
   const saveStatus = editor.saving ? "保存中…" : editor.conflict ? "有版本冲突" : editor.review ? "有新版本待查看" : editor.error ? "保存失败" : editor.dirty ? "尚未保存" : "已自动保存";
@@ -628,13 +650,14 @@ function Workbench({ workspace, view, onView, aiConfigured, collectorConfigured,
         <div className="work-meta"><MemoLink memo={workspace.source}>来源笔记</MemoLink><span>{date(workspace.source.created_at)}</span><details className="work-options"><summary aria-label="当前工作操作">更多<ChevronDown size={12}/></summary><div><button disabled={!!busy} onClick={() => void action("refresh", async () => update(await api.refresh(workspace.id)))}><RefreshCw size={13} className={busy === "refresh" ? "spin" : ""}/>检查 flomo 更新</button><button onClick={() => { void navigator.clipboard.writeText(`npm run --silent workbench -- workspace get ${workspace.id} --json`).then(() => { setCopyLabel("已复制"); setTimeout(() => setCopyLabel("复制 Codex 读取命令"), 2000); }).catch(() => setError("无法访问剪贴板，请通过当前页面地址中的工作区 ID 读取。")); }}><Terminal size={13}/>{copyLabel}</button><p>草稿版本 v{latestWorkspace.version}<br/>flomo 检查于 {date(latestWorkspace.lastCheckedAt, true)}</p></div></details></div>
         <GoalEditor workspace={latestWorkspace} onUpdate={update} onDirty={(dirty) => { goalDirty.current = dirty; }} />
       </section>
-      <nav className="work-tabs" aria-label="当前工作视图">{(["note", "materials", "writing", "draft"] as WorkbenchView[]).map((item) => <button key={item} className={view === item ? "selected" : ""} aria-current={view === item ? "page" : undefined} onClick={() => onView(item)}>{item === "note" ? <FileText size={16}/> : item === "materials" ? <Layers3 size={16}/> : item === "writing" ? <Sparkles size={16}/> : <BookOpen size={16}/>}<span>{viewLabels[item]}</span>{item === "materials" && (selectedCount > 0 || proposed.length > 0) && <span className="tab-count" title={`已选 ${selectedCount} 条，待选 ${proposed.length} 条`}>{proposed.length ? `${proposed.length} 待选` : selectedCount}</span>}{item === "note" && decisionsToReview.length > 0 && <span className="tab-dot"/>}{item === "draft" && (editor.review || editor.conflict) && <span className="tab-dot"/>}</button>)}</nav>
+      <nav className="work-tabs" aria-label="当前工作视图">{(["note", "materials", "discussion", "writing", "draft"] as WorkbenchView[]).map((item) => <button key={item} className={view === item ? "selected" : ""} aria-current={view === item ? "page" : undefined} onClick={() => onView(item)}>{item === "note" ? <FileText size={16}/> : item === "materials" ? <Layers3 size={16}/> : item === "discussion" ? <MessageCircle size={16}/> : item === "writing" ? <Sparkles size={16}/> : <BookOpen size={16}/>}<span>{viewLabels[item]}</span>{item === "materials" && (selectedCount > 0 || proposed.length > 0) && <span className="tab-count" title={`已选 ${selectedCount} 条，待选 ${proposed.length} 条`}>{proposed.length ? `${proposed.length} 待选` : selectedCount}</span>}{item === "note" && decisionsToReview.length > 0 && <span className="tab-dot"/>}{item === "draft" && (editor.review || editor.conflict) && <span className="tab-dot"/>}</button>)}</nav>
       <div className="work-view">
         <ErrorBox error={error}/>
         {editor.review && <div className="notice update-notice" role="status"><strong>Codex / 另一端更新了草稿</strong><p>{latestRevision?.actor !== "web" && latestRevision?.summary ? latestRevision.summary : "当前阅读和输入保持不变，查看后再采用新版本。"}</p><button className="text-button" onClick={() => setReviewOpen(true)}>查看草稿变化<ArrowRight size={14}/></button></div>}
         {editor.conflict && <div className="notice conflict-notice" role="alert"><strong>另一端更新了草稿，你的输入已保留</strong><p>两份内容都在。比较后选择要保留的版本。</p><button className="text-button" onClick={() => setReviewOpen(true)}>比较并处理<ArrowRight size={14}/></button></div>}
         {latestWorkspace.sourceChanged && <div className="notice remote-notice"><div><strong>flomo 原笔记有新内容</strong><p>本地草稿已保留，写回前需要比较。</p></div><button className="text-button" onClick={() => setRemoteCompare(true)}>比较原文变化<ArrowRight size={14}/></button></div>}
         {activeJobs.length > 0 && <JobList jobs={activeJobs} onAbandon={setAbandonJob} onReconcile={(id) => void action("reconcile", async () => { await api.reconcile(id); await jobs.refetch(); void client.invalidateQueries({ queryKey: ["workspace", workspace.id] }); })}/>}
+        {view !== "materials" && pendingLinks.length > 0 && <div className="notice" role="status"><strong>{pendingLinks.some(job => job.status === "uncertain") ? "笔记关联结果待核对" : "正在建立笔记关联"}</strong><button className="text-button" onClick={() => onView("materials")}>查看关联记录<ArrowRight size={13}/></button></div>}
         <div className="note-view" hidden={view !== "note"}>
           <section className="decision-section" hidden={!pendingDecisions.length && ![...dirtyInputs].some(key => key.startsWith("decision:"))}><div className="section-heading"><h2>需要你判断 <span>{decisionsToReview.length}</span></h2></div><p className="section-description">选择会保留在工作区，Codex 可以接着处理。</p>{decisions.map((decision) => <DecisionCard key={decision.id} decision={decision} disabled={!!busy} onDirty={(dirty) => trackInput(`decision:${decision.id}`, dirty)} onAnswer={async (answer, expectedAnswer) => { const saved = await editor.session.flush(); if (saved.decisions?.find(item => item.id === decision.id)?.answer !== expectedAnswer) throw new Error("这条判断已被另一端更新，请先核对新答案。"); update(await api.answerDecision(workspace.id, decision.id, answer, saved.version)); }}/>)}</section>
           <section className="reading-surface" aria-label="flomo 原文">
@@ -646,15 +669,38 @@ function Workbench({ workspace, view, onView, aiConfigured, collectorConfigured,
           <AnnotationComposer workspace={workspace} jobs={jobs.data ?? []} onDirty={(dirty) => trackInput("annotation", dirty)} onCreated={() => void jobs.refetch()}/>
           <div className="next-step"><button className="text-button" onClick={() => onView("materials")}><Layers3 size={15}/>查看相关材料<ArrowRight size={14}/></button>{selectedCount > 0 && <span>已选 {selectedCount} 条</span>}</div>
           {decisions.some((item) => item.answer) && <details className="quiet-disclosure"><summary>已作出的判断 <span>{decisions.filter((item) => item.answer).length}</span></summary>{decisions.filter((item) => item.answer).map((item) => <div key={item.id} className="answered-decision"><strong>{item.question}</strong><p>{item.answer}</p><span>{date(item.answeredAt ?? undefined, true)} · 已共享给 Codex</span></div>)}</details>}
-          <details className="quiet-disclosure"><summary><MessageCircle size={15}/>讨论与补充<span>{workspace.messages.length || ""}</span></summary><ChatPanel onNewDraft={createNoteDraft} onDirty={(dirty) => trackInput("chat", dirty)} workspace={latestWorkspace} aiConfigured={aiConfigured} flush={() => editor.session.flush()} onUpdate={update} onApply={applyToSource}/></details>
+          <div className="next-step"><button className="text-button" onClick={() => onView("discussion")}><MessageCircle size={15}/>讨论与补充<ArrowRight size={14}/></button><span>结合已选材料，继续推敲想法</span></div>
           </div>
         </div>
-        <div className="materials-view" hidden={view !== "materials"}><div className="section-heading"><h2>本次加工的材料</h2><button className="button secondary small" onClick={() => setMaterialSearch(true)}><Search size={14}/>查找</button></div><p className="section-description">你选用的内容会成为共享上下文。展开原文核对，再决定是否采用。</p>
-          <TopicDiscovery workspace={latestWorkspace} disabled={!!busy || !!editor.review || !!editor.conflict} flush={() => editor.session.flush()} onUpdate={update} onDirty={(dirty) => trackInput("discovery", dirty)}/>
-          {proposed.length > 0 && <section className="candidate-section"><div className="material-group-label"><span>待你选择</span><span>{proposed.length} 条推荐</span></div>{proposed.map((item) => materialCard(item.memo, item))}</section>}
-          <section><div className="material-group-label"><span>已选用</span><span>{selectedCount} 条</span></div>{selectedCount ? <>{selected.map((memo) => materialCard(memo, candidates.find((item) => item.memo.id === memo.id)))}{collectorMaterials.map((material) => <CollectorMaterialCard key={material.article.id} material={material} disabled={!!busy} configured={collectorConfigured} onRefresh={attachSource} onRemove={removeSource} renderContent={(content) => <Markdown>{content}</Markdown>}/>)}</> : <div className="empty-state small-empty"><Layers3 size={25}/><h3>先给这次思考找些依据</h3><p>在 Codex 中说“为当前笔记找材料，注明推荐理由”，也可以自己查找。</p><button className="text-button" onClick={() => setMaterialSearch(true)}>查找相关笔记<ArrowRight size={14}/></button></div>}</section>
-          {sourceAssociations("all")}
-          {dismissed.length > 0 && <details className="quiet-disclosure"><summary>暂时不用 <span>{dismissed.length}</span></summary>{dismissed.map((item) => materialCard(item.memo, item))}</details>}
+        <div className="materials-view" hidden={view !== "materials"}>
+          <div className="materials-heading"><div><h2>关联材料</h2><p>发现旧笔记之间的联系，留下值得继续思考的内容。</p></div><button className="text-button subdued" onClick={() => setMaterialSearch(true)}><Search size={14}/>手动查找</button></div>
+          <details className="discovery-drawer" open={discoveryOpen} onToggle={event => setDiscoveryOpen(event.currentTarget.open)}>
+            <summary><span className="discovery-drawer-icon">{discoveryRunning ? <Loader2 size={17} className="spin"/> : <Sparkles size={17}/>}</span><span className="discovery-drawer-label"><strong>{discoveryRunning ? "AI 正在查找材料" : candidates.length || selectedCount ? "继续找材料" : "让 AI 帮你找材料"}</strong><span>{discoveryNotice || (discoveryRunning ? "完成后推荐会自动出现在下方" : latestDiscovery?.status === "failed" ? "上次查找未完成，展开查看" : dirtyInputs.has("discovery") ? "有尚未提交的查找方向，展开继续" : latestDiscovery?.discovery?.result ? `上次读了 ${latestDiscovery.discovery.result.readCount} 条笔记 · 查看记录或调整方向` : "根据当前笔记寻找关联，也可以指定方向")}</span></span><ChevronDown size={15} className="discovery-drawer-chevron"/></summary>
+          <TopicDiscovery onStatus={setDiscoveryNotice} workspace={latestWorkspace} jobs={jobs.data ?? []} aiConfigured={aiConfigured} disabled={!!busy || !!editor.review || !!editor.conflict} flush={() => { if (goalDirty.current) throw new Error("本次目标尚未保存，请先保存或取消编辑后再找材料。"); return editor.session.flush(); }} onUpdate={update} onDirty={(dirty) => trackInput("discovery", dirty)}/>
+          </details>
+          <nav className="material-filters" aria-label="材料状态">
+            <button className={materialFilter === "proposed" ? "selected" : ""} aria-pressed={materialFilter === "proposed"} onClick={() => setMaterialFilter("proposed")}>待你选择 <span>{proposed.length}</span></button>
+            <button className={materialFilter === "selected" ? "selected" : ""} aria-pressed={materialFilter === "selected"} onClick={() => setMaterialFilter("selected")}>已选用 <span>{selectedCount}</span></button>
+            <button className={materialFilter === "dismissed" ? "selected" : ""} aria-pressed={materialFilter === "dismissed"} onClick={() => setMaterialFilter("dismissed")}>暂时不用 <span>{dismissed.length}</span></button>
+          </nav>
+          <section className="candidate-section" hidden={materialFilter !== "proposed"} aria-label="待你选择的材料">{proposed.length ? proposed.map((item) => materialCard(item.memo, item)) : <div className="empty-state small-empty"><CheckCheck size={24}/><h3>{selectedCount || dismissed.length ? "这轮材料已看完" : "还没有待选材料"}</h3><p>{selectedCount || dismissed.length ? "可以查看已选用的材料，或展开上方继续查找。" : "展开上方，让 AI 推荐相关笔记，也可以手动查找。"}</p></div>}</section>
+          <section hidden={materialFilter !== "selected"} aria-label="已选用的材料">{selectedCount ? <><div className="selection-summary"><span>{selectedCount} 条材料将用于讨论和写作</span><button className="text-button" onClick={() => onView("discussion")}>结合材料讨论<ArrowRight size={13}/></button></div>{selected.map((memo) => materialCard(memo, candidates.find((item) => item.memo.id === memo.id)))}{collectorMaterials.map((material) => <CollectorMaterialCard key={material.article.id} material={material} disabled={!!busy} configured={collectorConfigured} onRefresh={attachSource} onRemove={removeSource} renderContent={(content) => <Markdown>{content}</Markdown>}/>)}</> : <div className="empty-state small-empty"><Layers3 size={24}/><h3>还没有选用材料</h3><p>在「待你选择」中阅读关联理由和原文，再选用需要的内容。</p><button className="text-button" onClick={() => setMaterialFilter("proposed")}>查看推荐<ArrowRight size={14}/></button></div>}</section>
+          <section hidden={materialFilter !== "dismissed"} aria-label="暂时不用的材料">{dismissed.length ? dismissed.map((item) => materialCard(item.memo, item)) : <div className="empty-state small-empty"><h3>还没有暂时不用的材料</h3><p>略过的推荐会留在这里，之后仍可以选用。</p></div>}</section>
+          <NoteLinksPanel workspace={latestWorkspace} jobs={linkJobs.data ?? []} onOpen={target => setLinkDialog({target})} onUpdate={update}/>
+          <ErrorBox error={linkJobs.error} retry={() => void linkJobs.refetch()}/>
+          <details className="quiet-disclosure material-sources-disclosure"><summary><Link2 size={14}/>查找链接对应的收藏原文</summary>{sourceAssociations("all")}</details>
+        </div>
+        <div className="discussion-view" hidden={view !== "discussion"}>
+          <DiscussionPanel workspace={latestWorkspace} aiConfigured={aiConfigured} disabled={!!busy || !!editor.review || !!editor.conflict}
+            onNewDraft={createNoteDraft} onDirty={(dirty) => trackInput("chat", dirty)} onUpdate={update} onApply={applyToSource}
+            onMaterials={() => { setMaterialFilter("selected"); onView("materials"); }} renderContent={(content) => <Markdown>{content}</Markdown>}
+            flush={() => { if (goalDirty.current) throw new Error("本次目标尚未保存，请先保存或取消编辑后再讨论。"); return editor.session.flush(); }}
+            onRefreshMaterials={async () => {
+              if (goalDirty.current) throw new Error("本次目标尚未保存，请先保存或取消编辑。");
+              const saved = await editor.session.flush();
+              const refreshed = await api.refreshDiscussion(workspace.id, saved.version);
+              update(refreshed); return refreshed;
+            }}/>
         </div>
         <div className="writing-view" hidden={view !== "writing"}>
           <AnalysisPanel onNewDraft={createNoteDraft} onOpenCard={(analysisId,cardId)=>{setDraftChoice(`card:${analysisId}:${cardId}`);onView("draft");}} onMaterials={() => onView("materials")} workspace={latestWorkspace} aiConfigured={aiConfigured} disabled={!!busy || !!editor.review || !!editor.conflict} flush={() => { if (goalDirty.current) throw new Error("本次目标尚未保存，请先保存或取消编辑后再分析。"); return editor.session.flush(); }} onUpdate={update} onDirty={(dirty) => trackInput("analysis", dirty)} renderContent={(content) => <Markdown>{content}</Markdown>} onApply={applyToSource}/>
@@ -680,9 +726,10 @@ function Workbench({ workspace, view, onView, aiConfigured, collectorConfigured,
           {cardDrafts.map(({record,card,key})=><div key={key} hidden={activeDraftChoice !== key}><AnalysisCardDraft workspace={latestWorkspace} record={record} card={card} disabled={!!busy || !!editor.review || !!editor.conflict} flush={()=>editor.session.flush()} onUpdate={update} onDirty={dirty=>trackInput(key,dirty)} renderContent={content=><Markdown>{content}</Markdown>}/></div>)}
           {createdAnnotations.map(job=><section key={job.id} hidden={activeDraftChoice !== `annotation:${job.id}`} className="note-draft-editor"><div className="section-heading"><h3>已创建的批注笔记</h3><MemoLink memo={job.resultMemo!}>在 flomo 查看</MemoLink></div><div className="draft-preview"><Markdown>{job.resultMemo!.content}</Markdown></div></section>)}
         </div>
-        {!!jobs.data?.some((job) => !activeJobs.some((active) => active.id === job.id)) && <details className="quiet-disclosure task-history"><summary>已完成和失败的任务</summary><JobList jobs={jobs.data.filter((job) => !activeJobs.some((active) => active.id === job.id))} onAbandon={setAbandonJob} onReconcile={() => {}}/></details>}
+        {historyJobs.length > 0 && <details className="quiet-disclosure task-history"><summary>已完成和失败的任务</summary><JobList jobs={historyJobs} onAbandon={setAbandonJob} onReconcile={() => {}}/></details>}
         <ErrorBox error={jobs.error} retry={() => void jobs.refetch()}/>
       </div>
+      {linkDialog && <NoteLinkDialog workspace={latestWorkspace} target={linkDialog.target} flush={() => editor.session.flush()} onUpdate={update} onClose={() => setLinkDialog(null)}/>}
       {view === "draft" && activeDraftChoice === "source" && <footer className="draft-actionbar"><div><strong className={editor.error ? "error" : ""}>{editor.saving ? <Loader2 size={13} className="spin"/> : !editor.dirty && !editor.review && !editor.conflict ? <CheckCheck size={14}/> : <Circle size={8}/>} {saveStatus}</strong><span>确认写回后才会更新 flomo</span></div><button className="button primary" disabled={!!busy || !!editor.conflict || !!editor.review || activeJobs.some((job) => job.kind === "publish")} onClick={() => void preparePublish()}>{busy === "preview" ? <Loader2 size={14} className="spin"/> : <ArrowUpRight size={15}/>}预览写回</button></footer>}
       {reviewOpen && (editor.review || editor.conflict) && <Modal title={editor.conflict ? "选择要继续的草稿" : "查看另一端的草稿更新"} wide onClose={() => setReviewOpen(false)}><p className="modal-description">{editor.conflict ? "删除标记对应你的当前输入，新增标记对应另一端内容。你的输入仍保留在编辑器中，可关闭此窗口手动合并。" : "这里显示从当前草稿到新版本的变化；采用后才会更新编辑区。"}</p><InlineDiff before={editor.draft} after={(editor.conflict ?? editor.review)!.draft}/><div className="modal-actions"><button className="button secondary" onClick={() => setReviewOpen(false)}>暂不处理</button>{editor.conflict ? <><button className="button secondary" onClick={() => { editor.session.resolve("local"); setReviewOpen(false); }}>保留我的输入并保存</button><button className="button primary" onClick={() => { editor.session.resolve("server"); setReviewOpen(false); onView("draft"); }}>采用另一端版本</button></> : <button className="button primary" onClick={() => { editor.session.acceptReview(); setReviewOpen(false); onView("draft"); }}>采用新版本</button>}</div></Modal>}
       {revisionOpen && <Modal title={restoreTarget ? `还原到 v${restoreTarget.version}` : "草稿改动"} wide onClose={() => { if (!busy) {setRevisionOpen(null); setRestoreTarget(null);} }}>
@@ -908,220 +955,6 @@ function DecisionCard({ decision, disabled, onAnswer, onDirty }: {
   </article>;
 }
 
-function ChatPanel({
-  onDirty,
-  workspace,
-  aiConfigured,
-  flush,
-  onUpdate,
-  onApply,
-  onNewDraft,
-}: {
-  workspace: Workspace;
-  aiConfigured: boolean;
-  flush: () => Promise<Workspace>;
-  onUpdate: (workspace: Workspace) => void;
-  onApply: (content: string, mode: "append" | "replace") => void;
-  onNewDraft: (content:string)=>Promise<void>;
-  onDirty: (dirty: boolean) => void;
-}) {
-  const client = useQueryClient();
-  const [prompt, setPrompt] = useState("");
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [applyMessage, setApplyMessage] = useState<string | null>(null);
-  useEffect(() => { onDirty(!!prompt.length || busy); }, [prompt, busy]);
-  const attempt = useRef<{
-    prompt: string;
-    version: number;
-    key: string;
-  } | null>(null);
-  const runningJobs = useQuery({
-    queryKey: ["jobs", workspace.id],
-    queryFn: () => api.jobs(workspace.id),
-  });
-  const runningAI = runningJobs.data?.some(
-    (job) => job.kind === "ai" && job.status === "running",
-  );
-  async function send(useAI: boolean) {
-    if (!prompt.trim() || busy) return;
-    setBusy(true);
-    setError("");
-    try {
-      const saved = await flush();
-      if (useAI) {
-        if (!attempt.current || attempt.current.prompt !== prompt.trim())
-          attempt.current = {
-            prompt: prompt.trim(),
-            version: saved.version,
-            key: crypto.randomUUID(),
-          };
-        const current = attempt.current;
-        await api.ai(
-          workspace.id,
-          current.prompt,
-          current.version,
-          current.key,
-        );
-        attempt.current = null;
-      } else {
-        onUpdate(await api.message(workspace.id, prompt.trim(), saved.version));
-      }
-      setPrompt("");
-      void client.invalidateQueries({ queryKey: ["workspace", workspace.id] });
-      void client.invalidateQueries({ queryKey: ["jobs", workspace.id] });
-    } catch (error) {
-      setError(messageOf(error));
-      void client.invalidateQueries({ queryKey: ["workspace", workspace.id] });
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <div className="chat-panel">
-      <div className="chat-messages">
-        {workspace.messages.length === 0 && (
-          <div className="chat-empty">
-            <Sparkles size={23} />
-            <p>
-              这条笔记里，
-              <br />
-              你最想继续探究什么？
-            </p>
-            <button
-              disabled={busy}
-              onClick={() =>
-                setPrompt(
-                  "结合原笔记和参考材料，帮我找出最值得继续思考的三个问题，并标注对应笔记的来源。",
-                )
-              }
-            >
-              帮我找到值得追问的问题
-              <ArrowRight size={13} />
-            </button>
-          </div>
-        )}
-        {workspace.messages.map((message) => (
-          <article className={`chat-message ${message.role}`} key={message.id}>
-            <div className="message-meta">
-              <span>
-                {message.role === "user" ? "我的思考" : "AI 助手"}
-                <small>
-                  {message.actor === "cli"
-                    ? " · CLI"
-                    : message.actor === "mcp"
-                      ? " · MCP"
-                      : ""}
-                </small>
-              </span>
-              <span>{date(message.createdAt, true)}</span>
-            </div>
-            <Markdown>{message.content}</Markdown>
-            {message.role === "assistant" && (
-              <button
-                className="text-button"
-                onClick={() => setApplyMessage(message.content)}
-              >
-                <FileText size={13} />
-                用于草稿
-              </button>
-            )}
-          </article>
-        ))}
-        {runningAI && (
-          <div className="generating">
-            <Loader2 size={15} className="spin" />
-            正在结合材料思考…
-          </div>
-        )}
-      </div>
-      {!aiConfigured && (
-        <div className="agent-inline-note">
-          <Terminal size={15} />
-          <span>
-            未配置内置 AI。可以记录问题，再让 Codex 通过 CLI 读取并协助加工。
-          </span>
-        </div>
-      )}
-      <ErrorBox error={error} />
-      <form
-        className="chat-composer"
-        onSubmit={(event: FormEvent) => {
-          event.preventDefault();
-          void send(true);
-        }}
-      >
-        <textarea
-          aria-label="讨论问题"
-          readOnly={busy}
-          placeholder="提出问题，或记录自己的判断…"
-          value={prompt}
-          onChange={(event) => {
-            setPrompt(event.target.value);
-            attempt.current = null;
-          }}
-        />
-        <div>
-          <button
-            type="button"
-            className="text-button"
-            disabled={!prompt.trim() || busy}
-            onClick={() => void send(false)}
-          >
-            保存思考
-          </button>
-          <button
-            className="button primary small"
-            type="submit"
-            disabled={!prompt.trim() || busy || !aiConfigured || runningAI}
-          >
-            {busy ? (
-              <Loader2 size={14} className="spin" />
-            ) : (
-              <Sparkles size={14} />
-            )}
-            请 AI 一起想
-          </button>
-        </div>
-      </form>
-      {applyMessage && (
-        <Modal title="将回答用于草稿" onClose={() => {if(!busy)setApplyMessage(null);}}>
-          <p className="modal-description">
-            选择补充当前笔记，或独立保存为新笔记草稿。
-          </p>
-          <div className="apply-preview">
-            <Markdown>{applyMessage}</Markdown>
-          </div>
-          <ErrorBox error={error}/>
-          <div className="modal-actions">
-            <button className="button primary" disabled={busy} onClick={()=>{setBusy(true);setError('');void onNewDraft(applyMessage).then(()=>setApplyMessage(null)).catch(error=>setError(messageOf(error))).finally(()=>setBusy(false));}}>另存为新笔记草稿</button>
-            <button
-              disabled={busy}
-              className="button secondary"
-              onClick={() => {
-                onApply(applyMessage, "append");
-                setApplyMessage(null);
-              }}
-            >
-              追加到当前笔记
-            </button>
-            <button
-              className="button secondary"
-              disabled={busy}
-              onClick={() => {
-                onApply(applyMessage, "replace");
-                setApplyMessage(null);
-              }}
-            >
-              替换当前笔记草稿
-            </button>
-          </div>
-        </Modal>
-      )}
-    </div>
-  );
-}
-
 function JobList({
   jobs,
   onReconcile,
@@ -1157,7 +990,7 @@ function JobList({
             ) : (
               <Circle size={10} />
             )}
-            <strong>{job.kind === "publish" ? "写回 flomo" : job.kind === "annotation" ? "新建批注" : "AI 讨论"}</strong>
+            <strong>{job.kind === "publish" ? "写回 flomo" : job.kind === "annotation" ? "新建批注" : job.kind === "discovery" ? "AI 找材料" : "AI 讨论"}</strong>
             <span>
               {
                 {

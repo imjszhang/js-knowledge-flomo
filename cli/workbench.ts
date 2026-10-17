@@ -3,7 +3,8 @@ import 'dotenv/config';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { analysisCardPublishSchema, analysisCardUpdateSchema, analysisCreateSchema, analysisResultSchema, candidateChoiceSchema, candidatesSchema, contextSchema, decisionSchema, discoverySchema, noteDraftCreateSchema, noteDraftPublishSchema, noteDraftUpdateSchema, sourceAttachSchema, type ActiveContext, type Actor, type Change, type Workspace } from '../shared/contracts.js';
+import { aiDiscoveryJobSchema, analysisCardPublishSchema, analysisCardUpdateSchema, analysisCreateSchema, analysisResultSchema, candidateChoiceSchema, candidatesSchema, contextSchema, decisionSchema, discoverySchema, noteDraftCreateSchema, noteDraftPublishSchema, noteDraftUpdateSchema, sourceAttachSchema, type ActiveContext, type Actor, type Change, type Workspace } from '../shared/contracts.js';
+import { noteLinkCreateSchema, noteLinkPreviewSchema } from '../shared/note-links.js';
 
 export class WorkbenchError extends Error {
   constructor(public readonly code: string, message: string, public readonly exitCode = 1, public readonly details?: unknown) {
@@ -172,17 +173,21 @@ const usage = `flomo workbench CLI (requires the local service)
   workspace rebase ID --base-version N
   workspace goal ID (--file PATH | --stdin | --text TEXT) --base-version N
   context get
-  context set --workspace ID|none --view note|materials|writing|draft --base-revision N
+  context set --workspace ID|none --view note|materials|discussion|writing|draft --base-revision N
   draft update ID (--file PATH | --stdin | --text TEXT) --base-version N [--summary TEXT]
   draft diff ID | draft history ID
   draft publish ID --expected-version N --idempotency-key KEY
   note-draft create ID --file PATH --base-version N --idempotency-key KEY [--basis ANALYSIS_ID]
   note-draft update ID --note-draft DRAFT_ID --file PATH --base-version N
   note-draft publish ID --note-draft DRAFT_ID --base-version N --idempotency-key KEY
+  link list ID
+  link preview ID --memo ID [--direction outgoing|bidirectional] [--relation support|counterpoint|example|background] [--reason TEXT] --base-version N
+  link create ID --memo ID [--direction outgoing|bidirectional] [--relation support|counterpoint|example|background] [--reason TEXT] --base-version N --preview-hash HASH --idempotency-key KEY
   material set ID --memo ID1,ID2 --base-version N
   material propose ID --file PATH --base-version N
   material decide ID --memo ID --status selected|dismissed|proposed --base-version N
   material discover ID --terms TERM1,TERM2 [--tag TAG] [--exclude-tag TAG] [--start-date DATE] [--end-date DATE] [--limit N] --base-version N
+  material discover-ai ID [--instruction TEXT] [--tag TAG] [--exclude-tag TAG] [--start-date DATE] [--end-date DATE] [--limit N] --base-version N --idempotency-key KEY
   analysis create ID --kind insights|evolution|connections|outline|cards --engine builtin|external [--question TEXT] [--basis ANALYSIS_ID] [--file WRITING_JSON] --base-version N --idempotency-key KEY
   analysis list ID | analysis get ID --analysis ANALYSIS_ID
   analysis complete ID --analysis ANALYSIS_ID --file PATH --base-version N
@@ -194,6 +199,7 @@ const usage = `flomo workbench CLI (requires the local service)
   decision add ID --file PATH --base-version N
   decision answer ID --decision ID (--file PATH | --stdin | --text TEXT) --base-version N
   message add ID --role user|assistant (--file PATH | --stdin | --text TEXT) --base-version N
+  discussion refresh ID --base-version N
   ai run ID --prompt TEXT --base-version N --idempotency-key KEY
   job list [--workspace ID] | job get ID | job reconcile ID
   job abandon ID --base-version N --acknowledge
@@ -205,11 +211,26 @@ All commands support --json. Output is JSON; changes watch emits NDJSON.
 Use current instead of a workspace ID to target the note selected in the Web.
 Updating current requires --context-revision N from context get; explicit IDs do not.
 context revision controls the shared selection; base-version controls workspace content.
+link preview reads both full notes and shows proposed remote changes without writing to flomo.
+link create requires the reviewed previewHash and identical inputs; it APPENDS to existing remote notes.
+outgoing adds the target link to the workspace source; bidirectional explicitly updates both notes.
+Use link list to inspect saved jobs touching either side; job get/reconcile checks results without resending.
+An uncertain link must be verified, not recreated with a new key. Existing local drafts are preserved;
+review remote changes and merge/rebase before publishing them so later drafts retain the new links.
+link preview and create with current both require --context-revision.
 material propose reads a JSON array of {memoId, reason, relation}; decision add reads {question, options}.
 material set changes only flomo materials; collector materials use source attach/detach.
 source resolve finds collector articles linked from the source and selected flomo materials.
 source attach saves a full article snapshot; attaching it again explicitly refreshes that snapshot.
+discussion refresh reloads the source and ALL selected note/article materials as one local update.
+It preserves the draft and saved replies; failures leave prior snapshots intact. No remote notes are changed.
+Material choices sync immediately; saved replies do not regenerate. Refresh before an external discussion,
+then read workspace get. Externally saved assistant messages have unknown generation freshness.
 material discover searches each comma/newline-separated term and proposes full notes; it does not select them.
+material discover-ai starts a background AI search and returns a job, not completed recommendations.
+Use job get JOB_ID or changes watch to follow its phases and result; read workspace get for current candidates/version.
+Use material decide to select or dismiss candidates; AI search progress, results and choices sync to the Web.
+An explicit workspace ID works without an open Web page. Use the same key only to retry the identical search.
 analysis complete reads {text, cards?}; card-update reads {title, body, tags, sourceKeys}.
 external analyses prepare sources and instructions for an agent; saving a result does not publish cards.
 card-publish creates a new flomo note after review; check analysis get until its card is published.
@@ -231,8 +252,8 @@ const optionTypes: Record<string, { type: 'string' | 'boolean' }> = {
   acknowledge: { type: 'boolean' }, workspace: { type: 'string' }, after: { type: 'string' }, prefix: { type: 'string' },
   view: { type: 'string' }, 'base-revision': { type: 'string' }, summary: { type: 'string' },
   status: { type: 'string' }, decision: { type: 'string' }, 'context-revision': { type: 'string' },
-  article: { type: 'string' },
-  terms: { type: 'string' }, kind: { type: 'string' }, engine: { type: 'string' }, question: { type: 'string' },
+  article: { type: 'string' }, direction: { type: 'string' }, relation: { type: 'string' }, reason: { type: 'string' }, 'preview-hash': { type: 'string' },
+  terms: { type: 'string' }, instruction: { type: 'string' }, kind: { type: 'string' }, engine: { type: 'string' }, question: { type: 'string' },
   basis: { type: 'string' }, analysis: { type: 'string' }, card: { type: 'string' }, 'note-draft': { type: 'string' },
 };
 
@@ -251,10 +272,14 @@ const commandOptions: Record<string, { flags: string[]; id?: boolean }> = {
   'note-draft create': { flags: ['file', 'basis', 'base-version', 'idempotency-key'], id: true },
   'note-draft update': { flags: ['note-draft', 'file', 'base-version'], id: true },
   'note-draft publish': { flags: ['note-draft', 'base-version', 'idempotency-key'], id: true },
+  'link list': { flags: [], id: true },
+  'link preview': { flags: ['memo', 'direction', 'relation', 'reason', 'base-version'], id: true },
+  'link create': { flags: ['memo', 'direction', 'relation', 'reason', 'base-version', 'preview-hash', 'idempotency-key'], id: true },
   'material set': { flags: ['memo', 'base-version'], id: true },
   'material propose': { flags: ['file', 'base-version'], id: true },
   'material decide': { flags: ['memo', 'status', 'base-version'], id: true },
   'material discover': { flags: ['terms', 'tag', 'exclude-tag', 'start-date', 'end-date', 'limit', 'base-version'], id: true },
+  'material discover-ai': { flags: ['instruction', 'tag', 'exclude-tag', 'start-date', 'end-date', 'limit', 'base-version', 'idempotency-key'], id: true },
   'analysis create': { flags: ['kind', 'engine', 'question', 'basis', 'file', 'base-version', 'idempotency-key'], id: true },
   'analysis list': { flags: [], id: true }, 'analysis get': { flags: ['analysis'], id: true },
   'analysis complete': { flags: ['analysis', 'file', 'base-version'], id: true },
@@ -266,13 +291,14 @@ const commandOptions: Record<string, { flags: string[]; id?: boolean }> = {
   'decision add': { flags: ['file', 'base-version'], id: true },
   'decision answer': { flags: ['decision', 'file', 'stdin', 'text', 'base-version'], id: true },
   'message add': { flags: ['role', 'file', 'stdin', 'text', 'base-version'], id: true },
+  'discussion refresh': { flags: ['base-version'], id: true },
   'ai run': { flags: ['prompt', 'base-version', 'idempotency-key'], id: true },
   'job list': { flags: ['workspace'] }, 'job get': { flags: [], id: true }, 'job reconcile': { flags: [], id: true },
   'job abandon': { flags: ['base-version', 'acknowledge'], id: true },
   'changes list': { flags: ['after'] }, 'changes watch': { flags: ['after'] },
   'settings get': { flags: [] }, 'settings set': { flags: ['file'] }, 'service status': { flags: [] },
 };
-for (const command of ['annotation create', 'workspace refresh', 'workspace rebase', 'workspace goal', 'draft update', 'draft publish', 'note-draft create', 'note-draft update', 'note-draft publish', 'material set', 'material propose', 'material decide', 'material discover', 'analysis create', 'analysis complete', 'analysis card-update', 'analysis card-publish', 'source attach', 'source detach', 'decision add', 'decision answer', 'message add', 'ai run']) {
+for (const command of ['annotation create', 'workspace refresh', 'workspace rebase', 'workspace goal', 'draft update', 'draft publish', 'note-draft create', 'note-draft update', 'note-draft publish', 'link preview', 'link create', 'material set', 'material propose', 'material decide', 'material discover', 'material discover-ai', 'analysis create', 'analysis complete', 'analysis card-update', 'analysis card-publish', 'source attach', 'source detach', 'decision add', 'decision answer', 'message add', 'discussion refresh', 'ai run']) {
   commandOptions[command]!.flags.push('context-revision');
 }
 
@@ -299,7 +325,7 @@ export async function runCli(args: string[], io: CliIO = defaultIO, suppliedClie
     const command = `${group} ${action}`;
     const spec = commandOptions[command];
     if (!spec || positionals.length !== (spec.id ? 3 : 2)) throw new WorkbenchError('INVALID_COMMAND', 'Unknown command or incorrect positional arguments. Run with --help.', 2);
-    if ((group === 'source' || group === 'analysis' || group === 'note-draft' || command === 'material discover') && !id?.trim()) throw new WorkbenchError('INVALID_ARGUMENT', 'A nonempty workspace or article ID is required.', 2);
+    if ((group === 'source' || group === 'analysis' || group === 'note-draft' || group === 'link' || group === 'discussion' || command === 'material discover' || command === 'material discover-ai') && !id?.trim()) throw new WorkbenchError('INVALID_ARGUMENT', 'A nonempty workspace or article ID is required.', 2);
     for (const key of Object.keys(values)) {
       if (key !== 'json' && !spec.flags.includes(key)) throw new WorkbenchError('INVALID_ARGUMENT', `Option --${key} does not apply to ${command}.`, 2);
     }
@@ -341,13 +367,14 @@ export async function runCli(args: string[], io: CliIO = defaultIO, suppliedClie
       case 'workspace create': result = await client.request('POST', '/workspaces', { memoId: string('memo', true), title: string('title') }); break;
       case 'workspace get': result = await workspaceRequest('GET'); break;
       case 'workspace refresh': result = await workspaceRequest('POST', '/refresh', {}); break;
+      case 'discussion refresh': result = await workspaceRequest('POST', '/discussion/refresh', { baseVersion: integer('base-version') }); break;
       case 'workspace rebase': result = await workspaceRequest('POST', '/rebase', { baseVersion: integer('base-version') }); break;
       case 'workspace goal': result = await workspaceRequest('PATCH', '/goal', { goal: await content(), baseVersion: integer('base-version') }); break;
       case 'context get': result = await client.request('GET', '/context'); break;
       case 'context set': {
         const workspaceId = string('workspace', true)!;
         const parsed = contextSchema.safeParse({ workspaceId: workspaceId === 'none' ? null : workspaceId, view: string('view', true), baseRevision: integer('base-revision', undefined, 0) });
-        if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', '--view must be note, materials, writing or draft.', 2);
+        if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', '--view must be note, materials, discussion, writing or draft.', 2);
         if (parsed.data.workspaceId === 'current') parsed.data.workspaceId = await client.resolveWorkspaceId('current', parsed.data.baseRevision);
         result = await client.request('PUT', '/context', parsed.data);
         break;
@@ -383,6 +410,21 @@ export async function runCli(args: string[], io: CliIO = defaultIO, suppliedClie
         result = await workspaceRequest('POST', `/note-drafts/${encodeURIComponent(noteDraftId)}/publish`, parsed.data);
         break;
       }
+      case 'link list': result = await workspaceRequest('GET', '/links'); break;
+      case 'link preview':
+      case 'link create': {
+        const input = { targetMemoId: string('memo', true), direction: string('direction'), relation: string('relation'), reason: string('reason'), baseVersion: integer('base-version') };
+        if (command === 'link preview') {
+          const parsed = noteLinkPreviewSchema.safeParse(input);
+          if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', 'Use a valid target memo ID, direction outgoing or bidirectional, relation support/counterpoint/example/background, and a reason within the supported length.', 2);
+          result = await workspaceRequest('POST', '/links/preview', parsed.data);
+        } else {
+          const parsed = noteLinkCreateSchema.safeParse({ ...input, previewHash: string('preview-hash', true), idempotencyKey: string('idempotency-key', true) });
+          if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', 'Use the exact reviewed link preview inputs, a valid --preview-hash and a nonempty --idempotency-key up to 200 characters.', 2);
+          result = await workspaceRequest('POST', '/links', parsed.data);
+        }
+        break;
+      }
       case 'material set': {
         const memoIds = string('memo');
         if (memoIds === undefined) throw new WorkbenchError('INVALID_ARGUMENT', '--memo is required; pass an empty string to remove all flomo materials.', 2);
@@ -406,6 +448,12 @@ export async function runCli(args: string[], io: CliIO = defaultIO, suppliedClie
         const parsed = discoverySchema.safeParse({ terms: string('terms', true)!.split(/[,，\r\n]+/).map(term => term.trim()).filter(Boolean), tag: string('tag'), excludeTag: string('exclude-tag'), startDate: string('start-date'), endDate: string('end-date'), limit: integer('limit', 20), baseVersion: integer('base-version') });
         if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', 'Use 1–6 terms (up to 100 characters each), ISO dates (YYYY-MM-DD), and a limit between 1 and 30.', 2);
         result = await workspaceRequest('POST', '/discover', parsed.data);
+        break;
+      }
+      case 'material discover-ai': {
+        const parsed = aiDiscoveryJobSchema.safeParse({ instruction: string('instruction'), tag: string('tag'), excludeTag: string('exclude-tag'), startDate: string('start-date'), endDate: string('end-date'), limit: integer('limit', 20), baseVersion: integer('base-version'), idempotencyKey: string('idempotency-key', true) });
+        if (!parsed.success) throw new WorkbenchError('INVALID_ARGUMENT', 'Use an instruction up to 2000 characters, ISO dates (YYYY-MM-DD), a limit between 1 and 30, and an idempotency key of 1 to 200 characters.', 2);
+        result = await workspaceRequest('POST', '/discover/ai/jobs', parsed.data);
         break;
       }
       case 'analysis create': {

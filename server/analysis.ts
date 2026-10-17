@@ -1,13 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import type { Actor, AnalysisCard, AnalysisCardInput, AnalysisKind, AnalysisRecord, DiscoveryResult, MaterialCandidate, Memo, Workspace } from '../shared/contracts.js';
-import { analysisCardInputSchema, analysisCardPublishSchema, analysisCardUpdateSchema, analysisCreateSchema, analysisResultSchema, discoverySchema } from '../shared/contracts.js';
+import type { Actor, AnalysisCard, AnalysisCardInput, AnalysisKind, AnalysisRecord, DiscoveryResult, Job, MaterialCandidate, Memo, Workspace } from '../shared/contracts.js';
+import { analysisCardInputSchema, analysisCardPublishSchema, analysisCardUpdateSchema, analysisCreateSchema, analysisResultSchema, discoverySchema, aiDiscoverySchema, aiDiscoveryJobSchema } from '../shared/contracts.js';
 import { analysisFingerprint, analysisIsStale, analysisSources, formatAnalysisCard } from '../shared/analysis.js';
 import type { AIProvider, FlomoProvider } from './provider-types.js';
 import { ProviderError } from './provider-types.js';
 import { AppError } from './errors.js';
 import { Store } from './store.js';
 import { extractSourceUrls } from './collector.js';
+import { discoveryContext, planDiscovery, rankDiscovery } from './ai-discovery.js';
 
 const MAX_INPUT_CHARACTERS = 120_000;
 const MAX_OUTPUT_CHARACTERS = 100_000;
@@ -27,6 +28,7 @@ export class AnalysisService {
   private locks = new Map<string, Promise<unknown>>();
   private tasks = new Set<Promise<void>>();
   private controllers = new Set<AbortController>();
+  private discoveries = new Set<string>();
   constructor(readonly store: Store, readonly flomo: FlomoProvider, readonly ai?: AIProvider) {}
 
   private async locked<T>(id: string, operation: () => Promise<T>): Promise<T> {
@@ -65,32 +67,144 @@ export class AnalysisService {
     input = discoverySchema.parse(input);
     const initial = await this.store.getWorkspace(id);
     this.checkVersion(initial, input.baseVersion);
+    this.validateDiscoveryDates(input);
+    const collected = await this.collectDiscovery(initial,input);
+    const workspace = await this.saveDiscovery(initial,input.baseVersion,collected.incoming,actor);
+    const {incoming:_incoming,...summary} = collected;
+    return {workspace,...summary};
+  }
+
+  async startDiscovery(id: string, input: z.infer<typeof aiDiscoveryJobSchema>, actor: Actor): Promise<Job> {
+    const {idempotencyKey,...request} = aiDiscoveryJobSchema.parse(input);
+    return this.locked(id,async () => {
+      const requestHash = digest(request);
+      const jobs = await this.store.listJobs(id);
+      const existing = jobs.find(job => job.kind === 'discovery' && job.idempotencyKey === idempotencyKey) as (Job & {requestHash:string}) | undefined;
+      if (existing) {
+        if (existing.requestHash !== requestHash) throw new AppError('IDEMPOTENCY_CONFLICT','这个请求标识已用于不同查找条件，请使用新的标识',409);
+        return existing;
+      }
+      const initial = await this.store.getWorkspace(id);
+      this.checkVersion(initial,request.baseVersion);
+      this.validateDiscoveryDates(request);
+      if (!this.ai) throw new AppError('AI_NOT_CONFIGURED','尚未配置内置 AI，请配置模型后重试，也可以使用手动查找',503);
+      if (this.discoveries.has(id) || jobs.some(job => job.kind === 'discovery' && job.status === 'running'))
+        throw new AppError('AI_DISCOVERY_RUNNING','当前笔记正在由 AI 查找材料，请等待本次完成',409);
+      discoveryContext(initial);
+      let job: Job & {requestHash:string} = {id:randomUUID(),workspaceId:id,kind:'discovery',status:'running',actor,
+        text:'',error:null,createdAt:now(),updatedAt:now(),idempotencyKey,baseVersion:request.baseVersion,requestHash,
+        discovery:{input:request,phase:'planning'}};
+      await this.store.putJob(job);
+      this.background(async () => {
+        try {
+          await this.discoverWithAI(id,request,actor,{
+            job,
+            onProgress:async (phase,terms) => {
+              job = {...job,updatedAt:now(),discovery:{...job.discovery!,phase,...(terms ? {terms} : {})}};
+              await this.store.putJob(job);
+            },
+          });
+        } catch (error) {
+          // Provider messages are sanitized by the provider; never persist arbitrary upstream errors.
+          const known = error instanceof AppError || error instanceof ProviderError;
+          await this.store.putJob({...job,status:'failed',updatedAt:now(),
+            error:known ? error.message : 'AI 查找材料失败，请稍后重试',
+            discovery:{...job.discovery!,errorCode:known ? error.code : 'AI_DISCOVERY_FAILED'}});
+        }
+      });
+      return job;
+    });
+  }
+
+  async discoverWithAI(id: string, input: z.infer<typeof aiDiscoverySchema>, actor: Actor, options?: {
+    job?: Job;
+    onProgress?: (phase: NonNullable<Job['discovery']>['phase'], terms: string[]) => Promise<void>;
+  }): Promise<DiscoveryResult> {
+    input = aiDiscoverySchema.parse(input);
+    const initial = await this.store.getWorkspace(id);
+    this.checkVersion(initial,input.baseVersion);
+    this.validateDiscoveryDates(input);
+    if (!this.ai) throw new AppError('AI_NOT_CONFIGURED','尚未配置内置 AI，请配置模型后重试，也可以使用手动查找',503);
+    if (this.discoveries.has(id)) throw new AppError('AI_DISCOVERY_RUNNING','当前笔记正在由 AI 查找材料，请等待本次完成',409);
+    const context = discoveryContext(initial);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(),180_000);
+    timer.unref();
+    this.controllers.add(controller);
+    this.discoveries.add(id);
+    try {
+      const terms = await planDiscovery(this.ai,context,input.instruction,controller.signal);
+      this.checkVersion(await this.store.getWorkspace(id),input.baseVersion);
+      await options?.onProgress?.('searching',terms);
+      const collected = await this.collectDiscovery(initial,{...input,terms},controller.signal,true);
+      let summary = '本次没有找到可读取完整正文的候选，可以调整查找方向或筛选范围再试。';
+      let incoming = collected.incoming;
+      if (incoming.length) {
+        await options?.onProgress?.('ranking',terms);
+        const ranked = await rankDiscovery(this.ai,context,input.instruction,incoming,controller.signal);
+        incoming = ranked.candidates;
+        summary = ranked.summary;
+        collected.omitted.push(...ranked.omitted);
+      }
+      controller.signal.throwIfAborted();
+      const result = {terms,possiblyLimited:collected.possiblyLimited,readCount:collected.readCount,omitted:collected.omitted,
+        ai:{summary,recommendedCount:incoming.length}};
+      const completed: Job | undefined = options?.job ? {...options.job,status:'succeeded',text:summary,updatedAt:now(),
+        discovery:{...options.job.discovery!,phase:collected.incoming.length ? 'ranking' : 'searching',terms,result}} : undefined;
+      const workspace = await this.saveDiscovery(initial,input.baseVersion,incoming,actor,true,completed);
+      return {workspace,...result};
+    } catch (error) {
+      if (controller.signal.aborted) throw new AppError('AI_DISCOVERY_TIMEOUT','AI 查找材料超时或服务已中断，请缩小范围后重试；本次未保存候选',504);
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      this.controllers.delete(controller);
+      this.discoveries.delete(id);
+    }
+  }
+
+  private validateDiscoveryDates(input: Pick<z.infer<typeof discoverySchema>,'startDate'|'endDate'>): void {
     if (input.startDate && input.endDate && input.startDate > input.endDate)
       throw new AppError('INVALID_DATE_RANGE', '开始日期不能晚于结束日期');
     for (const date of [input.startDate,input.endDate].filter(Boolean) as string[]) {
       if (Number.isNaN(Date.parse(date)) || new Date(date).toISOString().slice(0,10) !== date)
         throw new AppError('INVALID_DATE_RANGE', '请输入有效日期');
     }
+  }
+
+  private async collectDiscovery(initial: Workspace, input: z.infer<typeof discoverySchema>, signal?: AbortSignal, ai = false) {
     const terms = [...new Set(input.terms)];
     const candidates = new Map<string, {memo:Memo;reasons:string[]}>();
+    const decidedIds = new Set(ai ? [
+      ...initial.materials.map(memo => memo.id),
+      ...(initial.materialCandidates ?? []).filter(item => item.status !== 'proposed').map(item => item.memo.id),
+    ] : []);
     const omitted: DiscoveryResult['omitted'] = [];
     let possiblyLimited = false;
     const add = (memo: Memo, reason: string) => {
-      if (memo.id === initial.memoId) return;
+      if (memo.id === initial.memoId || decidedIds.has(memo.id)) return;
       const item = candidates.get(memo.id);
       if (item) { if (!item.reasons.includes(reason)) item.reasons.push(reason); }
       else candidates.set(memo.id, {memo,reasons:[reason]});
     };
     // flomo's whitespace joins keywords with AND; independent requests implement OR across terms.
+    const searches: {term:string;memos:Memo[]}[] = [];
     for (const term of terms) {
+      signal?.throwIfAborted();
       const result = await this.flomo.search({query:term,tag:input.tag,excludeTag:input.excludeTag,startDate:input.startDate,endDate:input.endDate,limit:input.limit});
       possiblyLimited ||= result.possiblyLimited;
-      for (const memo of result.memos) add(memo, `匹配主题词「${term}」`);
+      searches.push({term,memos:result.memos});
+      if (!ai) for (const memo of result.memos) add(memo, `匹配主题词「${term}」`);
     }
-    const seeds = [...candidates.keys()];
+    // Give each AI search angle a chance before the full-read budget is exhausted.
+    if (ai) for (let index = 0; index < Math.max(0,...searches.map(search => search.memos.length)); index++) {
+      for (const {term,memos} of searches) if (memos[index]) add(memos[index],`匹配主题词「${term}」`);
+    }
+    const seeds = ai ? [initial.memoId,...candidates.keys()] : [...candidates.keys()];
     // Recommendations are deliberately bounded and are not a claim of a complete library scan.
     if (seeds.length > 3) possiblyLimited = true;
     for (const seed of seeds.slice(0,3)) {
+      signal?.throwIfAborted();
       try {
         const related = await this.flomo.related(seed);
         if (related.length >= 20) possiblyLimited = true;
@@ -129,6 +243,7 @@ export class AnalysisService {
     const incoming: MaterialCandidate[] = [];
     let readCount = 0;
     for (const item of selected) {
+      signal?.throwIfAborted();
       try {
         const memo = await this.flomo.get(item.memo.id);
         if (memo.id !== item.memo.id || memo.content_truncated || !memo.content.trim()) throw new Error('incomplete');
@@ -140,27 +255,35 @@ export class AnalysisService {
         omitted.push({memoId:item.memo.id,reason:'无法获得完整正文，未加入候选'});
       }
     }
+    signal?.throwIfAborted();
+    return {incoming,terms,possiblyLimited,readCount,omitted};
+  }
+
+  private async saveDiscovery(initial: Workspace, baseVersion: number, incoming: MaterialCandidate[], actor: Actor, ai = false, completedJob?: Job): Promise<Workspace> {
     if (!incoming.length) {
-      const current = await this.store.getWorkspace(id);
-      this.checkVersion(current,input.baseVersion);
-      return {workspace:current,terms,possiblyLimited,readCount,omitted};
+      if (completedJob) return this.store.finishDiscoveryWithoutCandidates(completedJob,baseVersion);
+      const current = await this.store.getWorkspace(initial.id);
+      this.checkVersion(current,baseVersion);
+      return current;
     }
-    const workspace = await this.store.updateWorkspace(id,input.baseVersion,actor,'analysis-discovery',current => {
+    return this.store.updateWorkspace(initial.id,baseVersion,actor,'analysis-discovery',current => {
       const merged = new Map((current.materialCandidates ?? []).map(candidate => [candidate.memo.id,candidate]));
       for (const item of incoming) {
         const previous = merged.get(item.memo.id);
         const selectedMemo = current.materials.find(memo => memo.id === item.memo.id);
         merged.set(item.memo.id,{...item,
           memo:selectedMemo ?? item.memo,
-          relation:previous?.relation ?? item.relation,
-          reason:previous ? `${previous.reason}；${item.reason}`.slice(0,2000) : item.reason,
+          relation:ai && (!previous || previous.status === 'proposed') ? item.relation : previous?.relation ?? item.relation,
+          reason:ai ? (previous && previous.status !== 'proposed' ? previous.reason : item.reason).slice(0,2000) : previous ? `${previous.reason}；${item.reason}`.slice(0,2000) : item.reason,
           status:previous?.status ?? (selectedMemo ? 'selected' : 'proposed'),
         });
       }
       if (merged.size > 100) throw new AppError('CANDIDATE_LIMIT', '每次加工最多保留 100 条候选材料');
-      return {...current,materialCandidates:[...merged.values()]};
-    }, `找到 ${incoming.length} 条主题候选材料，尚未自动选用`);
-    return {workspace,terms,possiblyLimited,readCount,omitted};
+      const recommendedIds = new Set(incoming.map(item => item.memo.id));
+      const remaining = [...merged.values()].filter(item => !recommendedIds.has(item.memo.id));
+      const ordered = ai ? [...incoming.map(item => merged.get(item.memo.id)!),...remaining] : [...merged.values()];
+      return {...current,materialCandidates:ordered};
+    }, `${ai ? 'AI 推荐了' : '找到'} ${incoming.length} 条${ai ? '' : '主题'}候选材料，尚未自动选用`,completedJob);
   }
 
   async create(id: string, input: z.infer<typeof analysisCreateSchema>, actor: Actor): Promise<Workspace> {

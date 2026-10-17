@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { NoteLinkInput, NoteLinkStep } from './note-links.js';
 
 export const pinnedTags = ['待编', '概要', '想法', '资源'] as const;
 export type Actor = 'web' | 'cli' | 'mcp';
@@ -41,12 +42,28 @@ export interface SourceResolution {
     message?: string;
   }[];
 }
+export interface DiscussionSource {
+  key: string;
+  kind: 'flomo' | 'collector';
+  id: string;
+  url: string;
+  title: string;
+  updatedAt: string;
+}
+export interface DiscussionContext {
+  workspaceVersion: number;
+  capturedAt: string;
+  /** Exact canonical input, used for comparison rather than a security digest. */
+  fingerprint: string;
+  sources: DiscussionSource[];
+}
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   createdAt: string;
   actor: Actor;
+  discussionContext?: DiscussionContext;
 }
 export type MaterialRelation = 'support' | 'counterpoint' | 'example' | 'background';
 export interface MaterialCandidate {
@@ -137,8 +154,9 @@ export interface DiscoveryResult {
   possiblyLimited: boolean;
   readCount: number;
   omitted: { memoId: string; reason: string }[];
+  ai?: { summary: string; recommendedCount: number };
 }
-export type WorkbenchView = 'note' | 'materials' | 'writing' | 'draft';
+export type WorkbenchView = 'note' | 'materials' | 'discussion' | 'writing' | 'draft';
 export interface ActiveContext {
   workspaceId: string | null;
   view: WorkbenchView;
@@ -191,7 +209,7 @@ export interface Change {
 export interface Job {
   id: string;
   workspaceId: string;
-  kind: 'ai' | 'publish' | 'annotation';
+  kind: 'ai' | 'publish' | 'annotation' | 'discovery' | 'link';
   resultMemo?: Memo;
   status: 'running' | 'succeeded' | 'failed' | 'uncertain';
   actor: Actor;
@@ -202,6 +220,16 @@ export interface Job {
   idempotencyKey: string;
   baseVersion: number;
   targetContent?: string;
+  discussionContext?: DiscussionContext;
+  link?: { sourceMemoId:string; input:NoteLinkInput; previewHash:string; steps:NoteLinkStep[] };
+  discovery?: {
+    input: z.infer<typeof aiDiscoverySchema>;
+    phase: 'planning' | 'searching' | 'ranking';
+    terms?: string[];
+    result?: Omit<DiscoveryResult,'workspace'>;
+    workspaceVersion?: number;
+    errorCode?: string;
+  };
 }
 export interface MemoSearch {
   unlinkedOnly?: boolean;
@@ -244,7 +272,7 @@ export const noteDraftCreateSchema = z.object({
 export const noteDraftUpdateSchema = z.object({title:z.string().trim().max(200),content:z.string().max(100_000),baseVersion:versionSchema}).strict();
 export const noteDraftPublishSchema = publishSchema;
 export const settingsSchema = z.object({ pinnedTags: z.array(z.string().min(1).max(100)).min(1).max(20), refreshSeconds: z.union([z.literal(0), z.number().int().min(30).max(3600)]) }).strict();
-export const contextSchema = z.object({ workspaceId:z.string().min(1).nullable(), view:z.enum(['note','materials','writing','draft']), baseRevision:z.number().int().nonnegative() }).strict();
+export const contextSchema = z.object({ workspaceId:z.string().min(1).nullable(), view:z.enum(['note','materials','discussion','writing','draft']), baseRevision:z.number().int().nonnegative() }).strict();
 export const goalSchema = z.object({ goal:z.string().max(5000), baseVersion:versionSchema }).strict();
 export const candidatesSchema = z.object({ items:z.array(z.object({ memoId:z.string().min(1), reason:z.string().min(1).max(2000), relation:z.enum(['support','counterpoint','example','background']) }).strict()).min(1).max(30), baseVersion:versionSchema }).strict();
 export const candidateChoiceSchema = z.object({ status:z.enum(['selected','dismissed','proposed']), baseVersion:versionSchema }).strict();
@@ -256,6 +284,10 @@ export const discoverySchema = z.object({
   startDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(), endDate:z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   limit:z.number().int().min(1).max(30).default(20), baseVersion:versionSchema,
 }).strict();
+export const aiDiscoverySchema = discoverySchema.omit({terms:true}).extend({
+  instruction:z.string().trim().max(2000).default(''),
+}).strict();
+export const aiDiscoveryJobSchema = aiDiscoverySchema.extend({idempotencyKey:z.string().trim().min(1).max(200)}).strict();
 export const writingInputSchema = z.object({
   stage:z.enum(['questions','outline','paragraph']), claim:z.string().trim().min(1).max(2000),
   audience:z.string().trim().max(1000).default(''), answers:z.string().trim().max(10000).default(''),

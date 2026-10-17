@@ -58,16 +58,18 @@ export class Store {
     const { lastID } = await this.run('INSERT INTO workbench_changes(data) VALUES(?)', [JSON.stringify(entry)]);
     return { ...entry, id: lastID };
   }
-  private async transaction<T>(work: () => Promise<{ value: T; change: Change }>): Promise<T> {
+  private async transaction<T>(work: () => Promise<{ value: T; change: Change; additionalChanges?: Change[] }>): Promise<T> {
     await this.exec('BEGIN IMMEDIATE');
-    let committed: {value:T;change:Change};
+    let committed: {value:T;change:Change;additionalChanges?:Change[]};
     try {
       committed = await work();
       await this.exec('COMMIT');
     } catch (error) { await this.exec('ROLLBACK'); throw error; }
     // Observers are advisory: a failed socket cannot turn a committed save into an error.
-    for (const listener of this.events.rawListeners('change')) {
-      try { listener.call(this.events, committed.change); } catch { /* durable cursor allows the client to replay */ }
+    for (const change of [committed.change,...(committed.additionalChanges ?? [])]) {
+      for (const listener of this.events.rawListeners('change')) {
+        try { listener.call(this.events, change); } catch { /* durable cursor allows the client to replay */ }
+      }
     }
     return committed.value;
   }
@@ -88,7 +90,7 @@ export class Store {
       return { value: workspace, change };
     }));
   }
-  updateWorkspace(id: string, baseVersion: number | undefined, actor: Actor, kind: string, transform: (current: Workspace) => Workspace, summary?: string): Promise<Workspace> {
+  updateWorkspace(id: string, baseVersion: number | undefined, actor: Actor, kind: string, transform: (current: Workspace) => Workspace, summary?: string, completedDiscovery?: Job): Promise<Workspace> {
     return this.serial(() => this.transaction(async () => {
       const current = await this.readWorkspace(id);
       if (baseVersion !== undefined && baseVersion !== current.version)
@@ -104,7 +106,9 @@ export class Store {
         await this.run('INSERT INTO workbench_draft_revisions VALUES(?,?,?)', [revision.id,id,JSON.stringify(revision)]);
       }
       const change = await this.record({ entity: 'workspace', entityId: id, kind, actor, version: next.version, summary:description });
-      return { value: next, change };
+      // Discovery's candidates and terminal result must survive (or roll back) together.
+      const additionalChanges = completedDiscovery ? [await this.completeDiscovery(completedDiscovery,next)] : [];
+      return { value: next, change, additionalChanges };
     }));
   }
   listDraftRevisions(workspaceId: string): Promise<DraftRevision[]> {
@@ -150,6 +154,24 @@ export class Store {
       await this.run(`INSERT INTO workbench_jobs VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data`, [job.id, job.workspaceId, job.kind, job.idempotencyKey, JSON.stringify(job)]);
       const change = await this.record({ entity: 'job', entityId: job.id, kind: job.status, actor: job.actor });
       return { value: job, change };
+    }));
+  }
+  private async completeDiscovery(job: Job, workspace: Workspace): Promise<Change> {
+    if (job.kind !== 'discovery' || job.workspaceId !== workspace.id || !job.discovery || job.status !== 'succeeded')
+      throw new AppError('INVALID_JOB_STATE','材料查找任务状态不正确',409);
+    const completed = {...job,discovery:{...job.discovery,workspaceVersion:workspace.version}};
+    await this.run('UPDATE workbench_jobs SET data=? WHERE id=? AND workspace_id=? AND kind=?', [JSON.stringify(completed),job.id,workspace.id,'discovery'])
+      .then(result => { if (!result.changes) throw new AppError('NOT_FOUND','材料查找任务不存在',404); });
+    return this.record({entity:'job',entityId:job.id,kind:completed.status,actor:job.actor});
+  }
+  /** Empty results still have a durable job event, without manufacturing a workspace revision. */
+  finishDiscoveryWithoutCandidates(job: Job, baseVersion: number): Promise<Workspace> {
+    return this.serial(() => this.transaction(async () => {
+      const workspace = await this.readWorkspace(job.workspaceId);
+      if (workspace.version !== baseVersion)
+        throw new AppError('VERSION_CONFLICT','内容已被其他入口更新，请读取新版本后重新查找',409,{current:workspace});
+      const change = await this.completeDiscovery(job,workspace);
+      return {value:workspace,change};
     }));
   }
   changes(after = 0): Promise<Change[]> {

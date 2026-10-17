@@ -3,6 +3,7 @@ import type {AnalysisRecord, Workspace, WritingInput} from '../../shared/contrac
 import {analysisIsStale} from '../../shared/analysis';
 import {api, ApiError, messageOf} from './api';
 import {useAnalysisInput} from './analysis-forms';
+import {savedWritingSession} from './writing-session';
 
 export const writingLabels = {questions:'补充想法', outline:'组织提纲', paragraph:'展开段落'};
 const steps = ['questions', 'outline', 'paragraph'] as const;
@@ -27,6 +28,9 @@ export function WritingPanel({workspace, aiConfigured, disabled, flush, onUpdate
   const [engine,setEngine] = useState<'builtin'|'external'>(aiConfigured ? 'builtin' : 'external');
   const [busy,setBusy] = useState(false);
   const [error,setError] = useState('');
+  const [savedRecordId,setSavedRecordId] = useState('');
+  const [previousInput,setPreviousInput] = useState<NonNullable<ReturnType<typeof savedWritingSession>> | null>(null);
+  const savedRecords = (workspace.analyses ?? []).filter(record => record.writing).slice().reverse();
   const attempt = useRef<{signature:string;version:number;key:string} | undefined>(undefined);
   useEffect(()=>{onBusy(busy);},[busy]);
   const matchingRecords = (workspace.analyses ?? []).filter(r=>r.writing?.claim === form.claim.trim());
@@ -59,6 +63,28 @@ export function WritingPanel({workspace, aiConfigured, disabled, flush, onUpdate
   const requirementsChanged = !!basis && (['audience','answers','structure'] as const).some(key => basis.writing?.[key] !== form[key].trim());
   const locked = disabled || busy;
   return <section ref={surface} className="writing-workflow" aria-label="把这条想法展开">
+    {savedRecords.length > 0 && <details className="quiet-disclosure">
+      <summary>载入已有写作 <span>{savedRecords.length} 份</span></summary>
+      <div className="analysis-form">
+        <label>已同步的写作任务<select aria-label="已同步的写作任务" value={savedRecordId} disabled={locked} onChange={event=>setSavedRecordId(event.target.value)}>
+          <option value="">选择一份任务继续</option>
+          {savedRecords.map(record=><option key={record.id} value={record.id}>{writingLabels[record.writing!.stage]} · {record.writing!.claim.slice(0,48)} · {record.actor === 'web' ? '网页' : record.actor.toUpperCase()} · {new Date(record.createdAt).toLocaleString('zh-CN')}</option>)}
+        </select></label>
+        <p className="scope-notice">载入这份任务保存的想法、要求和步骤。当前输入可恢复。</p>
+        <div className="inline-actions">
+          {previousInput && <button type="button" className="text-button" disabled={locked} onClick={()=>{
+            setForm(previousInput.form);setBasisId(previousInput.basisId);setStep(previousInput.step);setEngine(previousInput.engine);setPreviousInput(null);setSavedRecordId('');setError('');
+          }}>恢复刚才的输入</button>}
+          <button type="button" className="button secondary small" disabled={locked || !savedRecords.some(record=>record.id === savedRecordId)} onClick={()=>{
+            const record = savedRecords.find(record=>record.id === savedRecordId);
+            const saved = record && savedWritingSession(record);
+            if (!saved) return;
+            setPreviousInput({form,step:currentStep,basisId,engine});
+            setForm(saved.form);setBasisId(saved.basisId);setStep(saved.step);setEngine(saved.engine);setError('');
+          }}>载入这份写作</button>
+        </div>
+      </div>
+    </details>}
     <div className="writing-settings"><label>分析助手<select value={engine} disabled={locked} onChange={e=>setEngine(e.target.value as typeof engine)}><option value="builtin" disabled={!aiConfigured}>内置 AI</option><option value="external">Codex / 外部助手</option></select></label></div>
     <nav className="writing-stepper" aria-label="写作步骤">{steps.map((item,index)=><button key={item} type="button" className={currentStep === item ? 'active' : ''} aria-current={currentStep === item ? 'step' : undefined} disabled={locked} onClick={()=>changeStep(item)}><span>{index + 1}</span>{writingLabels[item]}</button>)}</nav>
     {currentStep !== 'questions' && <div className="writing-context"><div><small>核心判断</small><p>{form.claim.trim() || '先补充一句你想表达的判断。'}</p></div><button type="button" className="text-button" disabled={locked} onClick={()=>changeStep('questions')}>修改想法</button></div>}

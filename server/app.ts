@@ -5,11 +5,12 @@ import { randomUUID } from 'node:crypto';
 import { z, ZodError } from 'zod';
 import { createWorkspaceSchema, updateDraftSchema, materialsSchema, messageSchema, aiSchema, publishSchema, settingsSchema, versionSchema,
   contextSchema, goalSchema, candidatesSchema, candidateChoiceSchema, decisionSchema, decisionAnswerSchema, sourceAttachSchema,
-  discoverySchema, analysisCreateSchema, analysisResultSchema, analysisCardUpdateSchema, analysisCardPublishSchema,
+  discoverySchema, aiDiscoverySchema, aiDiscoveryJobSchema, analysisCreateSchema, analysisResultSchema, analysisCardUpdateSchema, analysisCardPublishSchema,
   noteDraftCreateSchema, noteDraftUpdateSchema, noteDraftPublishSchema } from '../shared/contracts.js';
 import type { Actor, Change } from '../shared/contracts.js';
 import { AppError } from './errors.js';
 import { ProviderError } from './provider-types.js';
+import { noteLinkPreviewSchema, noteLinkCreateSchema } from '../shared/note-links.js';
 import { WorkbenchService } from './service.js';
 
 interface Options {
@@ -76,6 +77,13 @@ export async function createApp({ service, webRoot, flomoConfigured, periodicRef
     return service.createWorkspace(body.memoId, body.title, actor(request));
   });
   app.get(`${root}/workspaces/:id`, request => store.getWorkspace(idOf(request)));
+  app.get(`${root}/workspaces/:id/links`, request => service.noteLinks.list(idOf(request)));
+  app.post(`${root}/workspaces/:id/links/preview`, request => service.noteLinks.preview(idOf(request),noteLinkPreviewSchema.parse(request.body)));
+  app.post(`${root}/workspaces/:id/links`, async (request,reply) => {
+    const job = await service.noteLinks.create(idOf(request),noteLinkCreateSchema.parse(request.body),actor(request));
+    reply.code(202);
+    return job;
+  });
   const noteDraftParams = z.object({id:z.string().min(1),draftId:z.string().min(1)});
   app.post(`${root}/workspaces/:id/note-drafts`, async (request,reply) => {
     const workspace = await service.noteDrafts.create(idOf(request),noteDraftCreateSchema.parse(request.body),actor(request));
@@ -95,6 +103,12 @@ export async function createApp({ service, webRoot, flomoConfigured, periodicRef
   const analysisParams = z.object({id:z.string().min(1),analysisId:z.string().min(1)});
   const cardParams = analysisParams.extend({cardId:z.string().min(1)});
   app.post(`${root}/workspaces/:id/discover`, request => service.analysis.discover(idOf(request),discoverySchema.parse(request.body),actor(request)));
+  app.post(`${root}/workspaces/:id/discover/ai`, request => service.analysis.discoverWithAI(idOf(request),aiDiscoverySchema.parse(request.body),actor(request)));
+  app.post(`${root}/workspaces/:id/discover/ai/jobs`, async (request,reply) => {
+    const job = await service.analysis.startDiscovery(idOf(request),aiDiscoveryJobSchema.parse(request.body),actor(request));
+    reply.code(202);
+    return job;
+  });
   app.get(`${root}/workspaces/:id/analyses`, async request => (await store.getWorkspace(idOf(request))).analyses ?? []);
   app.get(`${root}/workspaces/:id/analyses/:analysisId`, async request => {
     const {id,analysisId} = analysisParams.parse(request.params);
@@ -170,6 +184,7 @@ export async function createApp({ service, webRoot, flomoConfigured, periodicRef
       messages:[...workspace.messages,{id:randomUUID(),role:body.role,content:body.content,createdAt:new Date().toISOString(),actor:actor(request)}]}));
   });
   app.post(`${root}/workspaces/:id/refresh`, request => service.refresh(idOf(request), actor(request)));
+  app.post(`${root}/workspaces/:id/discussion/refresh`, request => service.refreshDiscussion(idOf(request),z.object({baseVersion:versionSchema}).strict().parse(request.body).baseVersion,actor(request)));
   app.post(`${root}/workspaces/:id/rebase`, request => service.rebase(idOf(request), z.object({baseVersion:versionSchema}).strict().parse(request.body).baseVersion, actor(request)));
   app.post(`${root}/workspaces/:id/ai`, async (request, reply) => {
     const body = aiSchema.parse(request.body); reply.code(202);
@@ -239,7 +254,9 @@ export async function createApp({ service, webRoot, flomoConfigured, periodicRef
     refreshTask = (async () => {
       const settings = await store.getSettings();
       if (!settings.refreshSeconds) return;
-      const busy = new Set((await store.listJobs()).filter(job => job.kind === 'publish' && ['running','uncertain'].includes(job.status)).map(job => job.workspaceId));
+      const busy = new Set((await store.listJobs()).filter(job =>
+        (['publish','link'].includes(job.kind) && ['running','uncertain'].includes(job.status)) || (job.kind === 'discovery' && job.status === 'running'))
+        .map(job => job.workspaceId));
       const due = (await store.listWorkspaces()).filter(w => !busy.has(w.id) && Date.now()-Date.parse(w.lastCheckedAt) >= settings.refreshSeconds*1000)
         .sort((a,b) => a.lastCheckedAt.localeCompare(b.lastCheckedAt)).slice(0,5);
       for (const workspace of due) await service.refresh(workspace.id, 'web').catch(() => undefined);
