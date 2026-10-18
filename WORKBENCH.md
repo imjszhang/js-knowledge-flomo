@@ -202,6 +202,8 @@ COLLECTOR_API_PREFIX=/api/v1
 
 这里的 `3001` 只是示例，请替换成实际 collector 服务地址。`COLLECTOR_BASE_URL` 保留反向代理路径，例如 `http://host:8888/knowledge` 配合默认前缀会请求 `/knowledge/api/v1/articles.json`。未配置该地址时关联功能显示未配置；`COLLECTOR_API_PREFIX` 默认 `/api/v1`；`COLLECTOR_TOKEN` 和 `COLLECTOR_HTTP_PROXY` 均可省略。可以按 collector 项目的 `REMOTE_DB_*` 配置手动填写对应地址、凭据和代理；工作台不会自动读取相邻项目的配置。保存配置后重启工作台后端。CLI 和 MCP 仍然只需要 `FLOMO_WORKBENCH_URL`，不需要持有 collector 的凭据。
 
+如果整个工作台已经在远端运行，本地可设置 `WORKBENCH_REMOTE_URL` 和 `WORKBENCH_REMOTE_PROXY`，让本地网页、工作台 CLI / MCP 都通过一个本地入口连接远端。此时 `FLOMO_WORKBENCH_URL` 指向本地入口（默认 `http://127.0.0.1:3000`），数据和 AI / 收藏库配置由远端工作台提供，本地数据库不参与。完整配置见 [README 的远端连接说明](README.md#在当前设备连接远端工作台)。
+
 ```bash
 # 查询当前概要及已选 flomo 材料中链接对应的收藏
 npm run --silent workbench -- source resolve current --json
