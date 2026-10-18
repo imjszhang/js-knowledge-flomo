@@ -137,6 +137,21 @@ npm run --silent workbench -- changes watch --after 0 --json
 
 旧版搜索、洞察、缓存统计页面保留在 `npm run dev:legacy`，原 CLI、MCP、OpenClaw 入口保持兼容。新工作台加工状态请统一使用 `workbench` / `mcp:workbench`；旧入口直接修改 flomo 后，新工作台通过刷新原文检测变化。
 
+### 在当前设备连接远端工作台
+
+工作台已部署在另一台设备（例如同一网关的 `/flomo/`）时，可以用本地入口通过 HTTP / SOCKS5 代理访问。配置 `.env`：
+
+```dotenv
+PORT=3000
+WORKBENCH_REMOTE_URL=http://10.8.0.5:8888/flomo
+WORKBENCH_REMOTE_PROXY=socks5://127.0.0.1:1080
+FLOMO_WORKBENCH_URL=http://127.0.0.1:3000
+```
+
+运行 `npm run build` 后用 `npm start` 启动，打开 `http://127.0.0.1:3000/`。本地入口转发远端页面、操作和实时更新；工作台 CLI / MCP 继续连接本地端口，所以三者使用远端同一套数据和配置。此模式不会打开或迁移本地数据库，AI 和收藏库配置由远端服务负责。旧版 CLI / MCP 不受这个模式影响。
+
+`WORKBENCH_REMOTE_PROXY` 可省略以直连；要复用收藏库的代理，就填入与 `COLLECTOR_HTTP_PROXY` 相同的地址。它不会修改系统或浏览器代理。修改后需重启服务；清空 `WORKBENCH_REMOTE_URL` 即恢复本地工作台。远端或代理中断时会提示连接失败，不会自动切换到本地数据，也不会自动重发写入。
+
 ### 关联收藏原文
 
 「笔记」页的「笔记关联内容」会读取当前笔记引用的 flomo 笔记，以及检索后确认引用了当前笔记的笔记。可以直接展开完整正文，再点「用于这次加工」保存为材料，让讨论和写作使用这些内容。反向引用受远端搜索范围限制；读取失败或范围不完整时会在页面提示。
@@ -213,6 +228,8 @@ node cli/cli.js stats            # 本地缓存统计
 | `WORKBENCH_DB_PATH` | 工作台数据库路径，默认沿用 DB_PATH | `./data/cache.db` |
 | `PORT` | 工作台后台端口 | `3000` |
 | `FLOMO_WORKBENCH_URL` | CLI / MCP 连接的工作台地址 | `http://127.0.0.1:3000` |
+| `WORKBENCH_REMOTE_URL` | 可选，启用本地入口转发到远端工作台，保留 `/flomo` 等子路径 | — |
+| `WORKBENCH_REMOTE_PROXY` | 连接远端工作台的 HTTP / SOCKS5 代理 | 直连 |
 
 数据库新增独立的 `workbench_*` 表，保留已有缓存和洞察。它还保存未写回的草稿、讨论和任务，因此需要备份；请停止工作台服务后复制数据库文件，或使用 SQLite 的在线备份工具，运行中不要只复制主数据库而遗漏 WAL。
 
