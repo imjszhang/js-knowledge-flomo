@@ -4,7 +4,11 @@ import type { AIProvider, FlomoProvider } from './provider-types.js';
 import { extractSourceUrls, type CollectorProvider } from './collector.js';
 import { AppError } from './errors.js';
 import { Store } from './store.js';
+import { importedDraft } from '../shared/draft-markdown.js';
 import { AnalysisService } from './analysis.js';
+import { NoteDraftService } from './note-drafts.js';
+import { NoteLinkService } from './note-links.js';
+import { discussionContext } from '../shared/discussion.js';
 
 export function sameMemo(a: Memo, b: Memo): boolean {
   return a.content === b.content && a.updated_at === b.updated_at && JSON.stringify(a.tags) === JSON.stringify(b.tags);
@@ -15,8 +19,12 @@ export class WorkbenchService {
   private tasks = new Set<Promise<void>>();
   private controllers = new Set<AbortController>();
   readonly analysis: AnalysisService;
+  readonly noteDrafts: NoteDraftService;
+  readonly noteLinks: NoteLinkService;
   constructor(readonly store: Store, readonly flomo: FlomoProvider, readonly ai?: AIProvider, readonly collector?: CollectorProvider) {
     this.analysis = new AnalysisService(store,flomo,ai);
+    this.noteDrafts = new NoteDraftService(store,flomo);
+    this.noteLinks = new NoteLinkService(store,flomo,operation => this.locked('publish-global',operation));
   }
 
   private async locked<T>(id: string, operation: () => Promise<T>): Promise<T> {
@@ -34,25 +42,30 @@ export class WorkbenchService {
     this.tasks.add(task);
     void task.finally(() => this.tasks.delete(task));
   }
-  async settle(): Promise<void> { await Promise.all([...this.tasks]); await this.analysis.settle(); }
+  async settle(): Promise<void> { await Promise.all([...this.tasks]); await this.analysis.settle(); await this.noteDrafts.settle(); await this.noteLinks.settle(); }
   async close(): Promise<void> {
     for (const controller of this.controllers) controller.abort();
     await this.analysis.close();
+    await this.noteDrafts.close();
     await this.settle();
   }
   async recover(): Promise<void> {
     await this.analysis.recover();
+    await this.noteDrafts.recover();
     for (const job of await this.store.listJobs()) {
       if (job.status !== 'running') continue;
-      await this.store.putJob({ ...job, status: job.kind !== 'ai' ? 'uncertain' : 'failed',
-        error: job.kind !== 'ai' ? '服务曾中断，请核对远端写回结果；不会自动重试' : '服务曾中断，请重新发起生成', updatedAt: new Date().toISOString() });
+      const local = job.kind === 'ai' || job.kind === 'discovery';
+      await this.store.putJob({ ...job, status: local ? 'failed' : 'uncertain',
+        ...(job.kind === 'link' && job.link ? {link:{...job.link,steps:job.link.steps.map(step => step.status === 'writing' ? {...step,status:'uncertain' as const,error:'服务中断，请核对远端结果；未自动重试'} : step)}} : {}),
+        ...(job.kind === 'discovery' && job.discovery ? {discovery:{...job.discovery,errorCode:'SERVICE_INTERRUPTED'}} : {}),
+        error: local ? '服务曾中断，请重新发起任务' : '服务曾中断，请核对远端写回结果；不会自动重试', updatedAt: new Date().toISOString() });
     }
   }
   async createWorkspace(memoId: string, title: string | undefined, actor: Actor): Promise<Workspace> {
     const source = await this.flomo.get(memoId);
     const now = new Date().toISOString();
     return this.store.createWorkspace({ id: randomUUID(), memoId, title: title ?? (source.content.replace(/#[^\s]+/g,'').trim().split('\n')[0].slice(0,80) || '未命名笔记'),
-      source, remote: null, sourceChanged: false, draft: source.content, version: 1,
+      source, remote: null, sourceChanged: false, draft: importedDraft(source.content), version: 1,
       materials: [], messages: [], createdAt: now, updatedAt: now, lastCheckedAt: now }, actor);
   }
   async refresh(id: string, actor: Actor): Promise<Workspace> {
@@ -63,9 +76,41 @@ export class WorkbenchService {
         sourceChanged: !sameMemo(current.source, remote), lastCheckedAt: new Date().toISOString() }));
     });
   }
+  async refreshDiscussion(id: string, baseVersion: number, actor: Actor): Promise<Workspace> {
+    return this.locked('publish-global', () => this.locked(id, async () => {
+      const workspace = await this.store.getWorkspace(id);
+      this.checkVersion(workspace,baseVersion);
+      const pending = (await this.store.listJobs()).find(job => ['publish','link'].includes(job.kind) && ['running','uncertain'].includes(job.status));
+      if (pending) throw new AppError('PUBLISH_PENDING','请先等待或核对此前的写回或关联结果，再刷新讨论材料',409,{job:pending});
+      const readMemo = async (memoId: string) => {
+        const memo = await this.flomo.get(memoId);
+        if (memo.id !== memoId || memo.content_truncated || !memo.content.trim())
+          throw new AppError('FULL_CONTENT_UNAVAILABLE',`笔记 ${memoId} 未返回完整正文，已保留原有材料`,422);
+        return memo;
+      };
+      const remote = await readMemo(workspace.memoId);
+      const materials: Memo[] = [];
+      // Keep provider fan-out bounded; no workspace data is changed until every read succeeds.
+      for (let offset=0;offset<workspace.materials.length;offset+=4)
+        materials.push(...await Promise.all(workspace.materials.slice(offset,offset+4).map(memo => readMemo(memo.id))));
+      const collectorMaterials: NonNullable<Workspace['collectorMaterials']> = [];
+      for (const material of workspace.collectorMaterials ?? []) {
+        const article = await this.getSource(material.article.id);
+        if (article.id !== material.article.id || article.contentTruncated || !article.content.trim())
+          throw new AppError('COLLECTOR_CONTENT_UNAVAILABLE','收藏材料未返回完整正文，已保留原有材料',422);
+        collectorMaterials.push({...material,article,fetchedAt:new Date().toISOString()});
+      }
+      const selected = new Map(materials.map(memo => [memo.id,memo]));
+      return this.store.updateWorkspace(id,baseVersion,actor,'discussion-refreshed',current => ({...current,
+        remote,sourceChanged:!sameMemo(current.source,remote),lastCheckedAt:new Date().toISOString(),
+        materials,collectorMaterials,materialCandidates:current.materialCandidates?.map(candidate => ({...candidate,memo:selected.get(candidate.memo.id) ?? candidate.memo})),
+      }),'已刷新讨论使用的笔记和收藏材料，保留草稿与原文基线');
+    }));
+  }
   async rebase(id: string, baseVersion: number, actor: Actor): Promise<Workspace> {
     return this.locked(id, async () => {
-      const pending = (await this.store.listJobs(id)).find(job => job.kind === 'publish' && ['running','uncertain'].includes(job.status));
+      const {memoId} = await this.store.getWorkspace(id);
+      const pending = (await this.store.listJobs()).find(job => (job.kind === 'publish' && job.workspaceId === id || job.kind === 'link' && job.link && [job.link.sourceMemoId,job.link.input.targetMemoId].includes(memoId)) && ['running','uncertain'].includes(job.status));
       if (pending) throw new AppError('PUBLISH_PENDING', '请先核对正在进行的写回任务', 409, { job: pending });
       return this.store.updateWorkspace(id, baseVersion, actor, 'rebased', current => {
         if (!current.remote) throw new AppError('REFRESH_REQUIRED', '请先刷新远端原文，再确认合并');
@@ -208,10 +253,11 @@ export class WorkbenchService {
       if ((await this.store.listJobs(id)).some(job => job.kind === 'ai' && job.status === 'running'))
         throw new AppError('AI_PENDING', '此会话已有生成任务，请等待完成', 409);
       const now = new Date().toISOString();
+      const context = discussionContext(current);
       let job: Job & {requestHash: string} = { id: randomUUID(), workspaceId: id, kind:'ai', status:'running', actor,
-        text:'', error:null, createdAt:now, updatedAt:now, idempotencyKey:key, baseVersion, requestHash:hash };
+        text:'', error:null, createdAt:now, updatedAt:now, idempotencyKey:key, baseVersion, requestHash:hash,discussionContext:context };
       await this.store.updateWorkspace(id, baseVersion, actor, 'message', workspace => ({ ...workspace,
-        messages: [...workspace.messages, { id: randomUUID(), role:'user', content:prompt, createdAt:now, actor }] }));
+        messages: [...workspace.messages, { id: randomUUID(), role:'user', content:prompt, createdAt:now, actor,discussionContext:context }] }));
       await this.store.putJob(job);
       this.background(async () => {
         const controller = new AbortController();
@@ -228,7 +274,7 @@ export class WorkbenchService {
             }
           }, controller.signal);
           await this.store.updateWorkspace(id, undefined, actor, 'message', workspace => ({ ...workspace,
-            messages: [...workspace.messages, { id:randomUUID(), role:'assistant', content:text, createdAt:new Date().toISOString(), actor }] }));
+            messages: [...workspace.messages, { id:randomUUID(), role:'assistant', content:text, createdAt:new Date().toISOString(), actor,discussionContext:context }] }));
           job = { ...job, status:'succeeded', text, updatedAt:new Date().toISOString() };
         } catch (error) {
           job = { ...job, status:'failed', text:partial, error: message(error), updatedAt:new Date().toISOString() };
@@ -270,7 +316,7 @@ export class WorkbenchService {
       if (existing) return existing;
       const workspace = await this.store.getWorkspace(id);
       this.checkVersion(workspace, baseVersion);
-      const pending = (await this.store.listJobs()).find(job => job.kind === 'publish' && ['running','uncertain'].includes(job.status));
+      const pending = (await this.store.listJobs()).find(job => ['publish','link'].includes(job.kind) && ['running','uncertain'].includes(job.status));
       // Only one remote write at a time, including other sessions for the same memo.
       if (pending) throw new AppError('PUBLISH_PENDING', '请先等待或核对此前的写回结果', 409, { job:pending });
       if (!workspace.draft.trim()) throw new AppError('EMPTY_DRAFT', '不能写回空草稿');
@@ -309,6 +355,7 @@ export class WorkbenchService {
   }
   async reconcile(id: string): Promise<Job> {
     const existing = await this.store.getJob(id);
+    if (existing.kind === 'link') return this.noteLinks.reconcile(id);
     return this.locked(existing.workspaceId, async () => {
       const job = await this.store.getJob(id);
       if (job.kind !== 'publish' || job.status !== 'uncertain') return job;
@@ -324,6 +371,7 @@ export class WorkbenchService {
   }
   async abandon(id: string, baseVersion: number, actor: Actor): Promise<Job> {
     const existing = await this.store.getJob(id);
+    if (existing.kind === 'link') return this.noteLinks.abandon(id,baseVersion,actor);
     return this.locked(existing.workspaceId, async () => {
       const job = await this.store.getJob(id);
       if (job.kind !== 'publish' || job.status !== 'uncertain') throw new AppError('INVALID_JOB_STATE', '只有结果不明的写回任务可以结束跟踪', 409);

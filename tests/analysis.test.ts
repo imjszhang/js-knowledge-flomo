@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test, { type TestContext } from 'node:test';
 import { AnalysisService } from '../server/analysis.js';
+import { NoteDraftService } from '../server/note-drafts.js';
 import { Store } from '../server/store.js';
 import type { AIProvider, FlomoProvider } from '../server/provider-types.js';
 import type { AnalysisCardInput, AnalysisKind, Memo, MemoSearch, Workspace } from '../shared/contracts.js';
@@ -179,15 +180,17 @@ test('builtin analysis uses sanitized fixed inputs and completion preserves conc
     return '根据材料尚不能得出普遍结论。';
   }});
   t.after(() => gate.resolve());
-  const prepared = await f.service.create(f.workspace.id,{...creation(f.workspace),engine:'builtin'},'web');
+  const withNewDraft = await new NoteDraftService(f.store,f.flomo).create(f.workspace.id,{title:'未发表的新想法',content:'未验证的新判断',baseVersion:1,idempotencyKey:'new-draft'},'web');
+  const prepared = await f.service.create(f.workspace.id,{...creation(withNewDraft),engine:'builtin'},'web');
   await started.promise;
-  assert.equal(captured!.draft,'');assert.deepEqual(captured!.messages,[]);assert.deepEqual(captured!.analyses,[]);
+  assert.equal(captured!.draft,'');assert.deepEqual(captured!.messages,[]);assert.deepEqual(captured!.analyses,[]);assert.deepEqual(captured!.noteDrafts,[]);
   assert.equal(captured!.source.content,f.workspace.source.content);
   await f.store.updateWorkspace(prepared.id,prepared.version,'cli','draft',w => ({...w,draft:'生成时新增的用户草稿'}));
   gate.resolve();await f.service.settle();
   const final = await f.store.getWorkspace(prepared.id);
   assert.equal(final.analyses![0].status,'succeeded');assert.equal(final.analyses![0].sources[0].content,f.workspace.source.content);
   assert.equal(final.draft,'生成时新增的用户草稿');
+  assert.equal(final.noteDrafts![0].content,'未验证的新判断');
   const revisions = await f.store.listDraftRevisions(final.id);
   assert.equal(revisions.length,1);
 });
@@ -325,4 +328,41 @@ test('publication is uncertain when remote body changes even if all source links
   await f.service.settle();
   const stored = (await f.store.getWorkspace(current.id)).analyses![0].cards[0];
   assert.equal(stored.status,'uncertain');assert.equal(stored.resultMemo!.id,'new-1');assert.equal(f.flomo.creates.length,1);
+});
+
+test('guided writing preserves answers and edited outline, permits finding new materials between questions and outline, and rejects stale paragraph bases', async t => {
+  const f = await fixture(t);
+  const writing = {stage:'questions' as const,claim:'生态位需要需求验证',audience:'独立创作者',answers:'我的经验，仍需验证',structure:'direct' as const,outline:'',section:''};
+  let w = await f.service.create(f.workspace.id,{...creation(f.workspace),writing},'web');
+  const q = w.analyses!.at(-1)!;
+  assert.deepEqual(q.writing,writing);
+  assert.match(q.instructions,/不能冒充已证实事实/);
+  w = await f.service.complete(w.id,q.id,{text:'需求来自谁？',baseVersion:w.version},'mcp');
+  w = await f.store.updateWorkspace(w.id,w.version,'web','materials',v=>({...v,materials:[memo('evidence')]}));
+  w = await f.service.create(w.id,{...creation(w,'outline','outline'),writing:{...writing,stage:'outline'},basisAnalysisId:q.id},'web');
+  const outline = w.analyses!.at(-1)!;
+  assert.equal(outline.sources.length,2);
+  w = await f.service.complete(w.id,outline.id,{text:'一、验证需求',baseVersion:w.version},'mcp');
+  const paragraph = { ...writing,stage:'paragraph' as const,outline:'一、先定义需求\n二、验证需求',section:'先定义需求'};
+  const request = {...creation(w,'outline','paragraph'),writing:paragraph,basisAnalysisId:outline.id};
+  w = await f.service.create(w.id,request,'web');
+  assert.match(w.analyses!.at(-1)!.instructions,/先定义需求/);
+  assert.equal(w.draft,f.workspace.draft);
+  assert.equal(f.flomo.creates.length,0);
+  assert.equal((await f.service.create(w.id,request,'web')).version,w.version);
+  await assert.rejects(f.service.create(w.id,{...request,writing:{...paragraph,section:'另一个段落'}},'web'),{code:'IDEMPOTENCY_CONFLICT'});
+  await assert.rejects(f.service.create(w.id,{...creation(w,'outline','changed'),writing:{...paragraph,answers:'新补充'},basisAnalysisId:outline.id},'web'),{code:'WRITING_CHANGED'});
+  w = await f.store.updateWorkspace(w.id,w.version,'web','goal',v=>({...v,goal:'新的目标'}));
+  await assert.rejects(f.service.create(w.id,{...creation(w,'outline','stale'),writing:paragraph,basisAnalysisId:outline.id},'web'),{code:'ANALYSIS_STALE'});
+  await assert.rejects(f.service.create(w.id,{...creation(w,'outline','missing'),writing:paragraph},'web'),{code:'INVALID_WRITING'});
+});
+
+test('builtin analysis preserves safe provider failure reasons instead of reporting a format error', async t => {
+  const {ProviderError} = await import('../server/provider-types.js');
+  const reason='模型已达到输出额度，请提高上限后重试。';
+  const f=await fixture(t,{async generate() {throw new ProviderError(reason,'AI_OUTPUT_TRUNCATED');}});
+  await f.service.create(f.workspace.id,{...creation(f.workspace),engine:'builtin'},'web');
+  await f.service.settle();
+  const result=(await f.store.getWorkspace(f.workspace.id)).analyses![0];
+  assert.equal(result.status,'failed');assert.equal(result.error,reason);
 });

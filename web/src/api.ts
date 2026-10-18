@@ -17,6 +17,8 @@ import type {
   TagResult,
   Workspace,
 } from "../../shared/contracts";
+import type { AIDiscoveryRequest } from "./discovery-jobs";
+import type { NoteLinkCreateInput, NoteLinkInput, NoteLinkPreview } from "../../shared/note-links";
 
 export class ApiError extends Error {
   constructor(
@@ -73,6 +75,8 @@ export const api = {
       `/memos?${new URLSearchParams(Object.fromEntries(Object.entries(query).filter(([, value]) => value !== "")))}`,
     ),
   memo: (id: string) => request<Memo>(`/memos/${encodeURIComponent(id)}`),
+  refreshDiscussion: (id: string, baseVersion: number) =>
+    mutation<Workspace>(`/workspaces/${encodeURIComponent(id)}/discussion/refresh`, { baseVersion }),
   related: (id: string) =>
     request<Memo[]>(`/memos/${encodeURIComponent(id)}/related`),
   tags: () => request<TagResult>("/tags"),
@@ -81,13 +85,23 @@ export const api = {
     mutation<ActiveContext>("/context", { workspaceId, view, baseRevision }, "PUT"),
   discover: (id: string, input: {terms: string[]; tag?: string; excludeTag?: string; startDate?: string; endDate?: string; limit: number; baseVersion: number}) =>
     mutation<DiscoveryResult>(`/workspaces/${encodeURIComponent(id)}/discover`, input),
+  discoverWithAI: (id: string, input: {instruction?: string; tag?: string; excludeTag?: string; startDate?: string; endDate?: string; limit: number; baseVersion: number}) =>
+    mutation<DiscoveryResult>(`/workspaces/${encodeURIComponent(id)}/discover/ai`, input),
+  startAIDiscovery: (id: string, input: AIDiscoveryRequest, signal?: AbortSignal) =>
+    request<Job>(`/workspaces/${encodeURIComponent(id)}/discover/ai/jobs`, {method:"POST",body:JSON.stringify(input),signal}),
   analyses: (id: string) => request<AnalysisRecord[]>(`/workspaces/${encodeURIComponent(id)}/analyses`),
-  createAnalysis: (id: string, input: {kind: AnalysisKind; question: string; engine: "builtin" | "external"; basisAnalysisId?: string; baseVersion: number; idempotencyKey: string}) =>
+  createAnalysis: (id: string, input: {kind: AnalysisKind; question: string; engine: "builtin" | "external"; basisAnalysisId?: string; writing?: import("../../shared/contracts").WritingInput; baseVersion: number; idempotencyKey: string}) =>
     mutation<Workspace>(`/workspaces/${encodeURIComponent(id)}/analyses`, input),
   saveAnalysisCard: (id: string, analysisId: string, cardId: string, input: AnalysisCardInput & {baseVersion: number}) =>
     mutation<Workspace>(`/workspaces/${encodeURIComponent(id)}/analyses/${encodeURIComponent(analysisId)}/cards/${encodeURIComponent(cardId)}`, input, "PATCH"),
   publishAnalysisCard: (id: string, analysisId: string, cardId: string, baseVersion: number, idempotencyKey: string) =>
     mutation<Workspace>(`/workspaces/${encodeURIComponent(id)}/analyses/${encodeURIComponent(analysisId)}/cards/${encodeURIComponent(cardId)}/publish`, {baseVersion, idempotencyKey}),
+  createNoteDraft: (id:string, input:{title:string;content:string;baseVersion:number;idempotencyKey:string;originAnalysisId?:string}) =>
+    mutation<Workspace>(`/workspaces/${encodeURIComponent(id)}/note-drafts`,input),
+  saveNoteDraft: (id:string,draftId:string,input:{title:string;content:string;baseVersion:number}) =>
+    mutation<Workspace>(`/workspaces/${encodeURIComponent(id)}/note-drafts/${encodeURIComponent(draftId)}`,input,'PATCH'),
+  publishNoteDraft: (id:string,draftId:string,baseVersion:number,idempotencyKey:string) =>
+    mutation<Workspace>(`/workspaces/${encodeURIComponent(id)}/note-drafts/${encodeURIComponent(draftId)}/publish`,{baseVersion,idempotencyKey}),
   goal: (id: string, goal: string, baseVersion: number) =>
     mutation<Workspace>(`/workspaces/${id}/goal`, { goal, baseVersion }, "PATCH"),
   chooseCandidate: (id: string, memoId: string, status: MaterialCandidate["status"], baseVersion: number) =>
@@ -145,6 +159,12 @@ export const api = {
     mutation<Job>(`/workspaces/${id}/publish`, { baseVersion, idempotencyKey }),
   jobs: (id: string) =>
     request<Job[]>(`/jobs?workspaceId=${encodeURIComponent(id)}`),
+  links: (id: string) =>
+    request<Job[]>(`/workspaces/${encodeURIComponent(id)}/links`),
+  previewLink: (id: string, input: NoteLinkInput) =>
+    mutation<NoteLinkPreview>(`/workspaces/${encodeURIComponent(id)}/links/preview`, input),
+  createLink: (id: string, input: NoteLinkCreateInput) =>
+    mutation<Job>(`/workspaces/${encodeURIComponent(id)}/links`, input),
   reconcile: (id: string) => mutation<Job>(`/jobs/${id}/reconcile`, {}),
   abandon: (id: string, baseVersion: number) =>
     mutation<Job>(`/jobs/${id}/abandon`, { baseVersion, acknowledge: true }),
