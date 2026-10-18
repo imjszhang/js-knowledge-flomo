@@ -417,6 +417,12 @@ summary::marker { color: #819180; font-size: 11px; }
 .unlinked-filter span { color:#69766c; font-size:11px; }
 
 .collector-sources { margin: 20px 0; padding: 18px 0; border-top: 1px solid var(--border); }
+.linked-memos { margin: 20px 0; padding: 18px 0; border-top: 1px solid var(--border); }
+.linked-memos .section-heading h2 { display: flex; align-items: center; gap: 7px; font-size: 14px; }
+.linked-memo-card { margin-top: 13px; padding: 16px; border: 1px solid #e0e5e1; border-radius: 9px; background: white; }
+.linked-memo-title { display: block; margin: 0; font-size: 14px; font-weight: 550; line-height: 1.8; overflow-wrap: anywhere; }
+.linked-memo-card .material-actions { flex-wrap: wrap; }
+.linked-memo-card .material-actions .scope-notice { padding: 0; font-size: 11px; }
 .collector-sources .section-heading h2 { display: flex; align-items: center; gap: 7px; font-size: 14px; }
 .collector-source { margin-top: 13px; padding: 14px; border: 1px solid #e0e5e1; border-radius: 9px; background: white; }
 .collector-source-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; color: var(--muted); font-size: 11px; }

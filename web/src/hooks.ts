@@ -31,13 +31,14 @@ export function useChanges() {
         void client.invalidateQueries({ queryKey: ["revisions", change.entityId] });
       } else if (change.entity === "job") {
         void client.invalidateQueries({ queryKey: ["jobs"] });
+        if (change.kind !== "running") void client.invalidateQueries({ queryKey: ["linked-memos"] });
       } else if (change.entity === "context") {
         void client.invalidateQueries({ queryKey: ["context"] });
       } else if (change.entity === "settings") {
         void client.invalidateQueries({ queryKey: ["settings"] });
       }
     };
-    const events = new EventSource(`/api/v1/events?after=${cursor.current}`);
+    const events = new EventSource(`./api/v1/events?after=${cursor.current}`);
     events.onopen = () => setConnected(true);
     events.onerror = () => setConnected(false);
     events.addEventListener("change", (event) => {
@@ -57,6 +58,7 @@ export function useChanges() {
       void client.invalidateQueries({ queryKey: ["context"] });
       void client.invalidateQueries({ queryKey: ["revisions"] });
       void client.invalidateQueries({ queryKey: ["sources"] });
+      void client.invalidateQueries({ queryKey: ["linked-memos"] });
       void client.invalidateQueries({ queryKey: ["health"] });
       void api
         .changes(cursor.current)

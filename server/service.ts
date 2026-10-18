@@ -9,6 +9,8 @@ import { AnalysisService } from './analysis.js';
 import { NoteDraftService } from './note-drafts.js';
 import { NoteLinkService } from './note-links.js';
 import { discussionContext } from '../shared/discussion.js';
+import type { LinkedMemoResolution } from '../shared/linked-memos.js';
+import { resolveLinkedMemos } from './linked-memos.js';
 
 export function sameMemo(a: Memo, b: Memo): boolean {
   return a.content === b.content && a.updated_at === b.updated_at && JSON.stringify(a.tags) === JSON.stringify(b.tags);
@@ -173,6 +175,21 @@ export class WorkbenchService {
       }
     }
     return links;
+  }
+  async resolveLinkedMemos(id: string): Promise<LinkedMemoResolution> {
+    const workspace = await this.store.getWorkspace(id);
+    let source = workspace.remote ?? workspace.source;
+    let savedVersion = false;
+    try {
+      const fresh = await this.flomo.get(workspace.memoId);
+      if (fresh.id !== workspace.memoId || fresh.content_truncated || !fresh.content.trim() || fresh.content.length > 500_000)
+        throw new Error('Current memo did not return a complete matching body');
+      source = fresh;
+    } catch { savedVersion = true; }
+    const result = await resolveLinkedMemos(source,this.flomo);
+    return savedVersion ? {...result,truncated:true,warnings:[
+      '未能读取当前笔记的最新完整正文，暂按已保存版本展示关联，可能遗漏新增或仍显示已删除的关联。',...result.warnings,
+    ]} : result;
   }
   async resolveSources(id: string): Promise<SourceResolution> {
     const workspace = await this.store.getWorkspace(id);

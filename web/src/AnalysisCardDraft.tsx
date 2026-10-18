@@ -1,3 +1,4 @@
+import { randomUUID } from "./browser-compat";
 import {useEffect, useState, type ReactNode} from 'react';
 import {useQueryClient} from '@tanstack/react-query';
 import {ArrowUpRight, Check, Loader2} from 'lucide-react';
@@ -31,7 +32,7 @@ export function AnalysisCardDraft(props: {
       const latestRecord = saved.analyses?.find(item=>item.id === record.id);
       const latest = latestRecord?.cards.find(item=>item.id === card.id);
       if(!latest || !latestRecord || !latest.reviewedAt || inputSignature(latest) !== inputSignature(card) || latest.status !== 'draft') throw new Error('卡片已经更新，请先核对并保存最新内容。');
-      setPreview({content:formatAnalysisCard(latest,latestRecord.sources),version:saved.version,key:crypto.randomUUID()});
+      setPreview({content:formatAnalysisCard(latest,latestRecord.sources),version:saved.version,key:randomUUID()});
     } catch(error) {setError(messageOf(error));} finally {setBusy(false);}
   }
   async function publish() {

@@ -1,3 +1,4 @@
+import { randomUUID } from "./browser-compat";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ArrowUpRight, FileText, Layers3, Loader2, Sparkles, Terminal } from "lucide-react";
@@ -61,7 +62,7 @@ export function AnalysisPanel({workspace, aiConfigured, disabled, flush, onUpdat
       const saved = await flush();
       const input = {kind: basis ? "cards" as const : form.kind, question: basis ? basis.question : form.question.trim(), engine, ...(basis ? {basisAnalysisId: basis.id} : {})};
       const signature = JSON.stringify(input);
-      if (!requestAttempt.current || requestAttempt.current.signature !== signature) requestAttempt.current = {signature, version: saved.version, key: crypto.randomUUID()};
+      if (!requestAttempt.current || requestAttempt.current.signature !== signature) requestAttempt.current = {signature, version: saved.version, key: randomUUID()};
       const attempt = requestAttempt.current;
       onUpdate(await api.createAnalysis(workspace.id, {...input, baseVersion: attempt.version, idempotencyKey: attempt.key}));
       requestAttempt.current = null;

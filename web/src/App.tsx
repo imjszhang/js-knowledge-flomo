@@ -1,3 +1,4 @@
+import { randomUUID, writeClipboardText } from "./browser-compat";
 import {
   useEffect,
   useRef,
@@ -45,6 +46,7 @@ import {useAnalysisInput} from "./analysis-forms";
 import { TopicDiscovery } from "./TopicDiscovery";
 import { CollectorMaterialCard, CollectorSources } from "./CollectorSources";
 import { NoteLinkDialog, NoteLinksPanel } from "./NoteLinks";
+import { LinkedMemos } from "./LinkedMemos";
 import { DiscussionPanel } from "./DiscussionPanel";
 
 type LeaveGuard = () => Promise<unknown>;
@@ -572,7 +574,7 @@ function Workbench({ workspace, view, onView, aiConfigured, collectorConfigured,
       const title=content.trim() ? (saved.analyses?.find(record=>record.id === originAnalysisId)?.writing?.claim || excerpt(content,100).split(/[\n。！？]/)[0]).slice(0,60) : '';
       const input={title,content,originAnalysisId};
       const signature=JSON.stringify(input);
-      if(newDraftAttempt.current?.signature !== signature) newDraftAttempt.current={signature,version:saved.version,key:crypto.randomUUID()};
+      if(newDraftAttempt.current?.signature !== signature) newDraftAttempt.current={signature,version:saved.version,key:randomUUID()};
       const attempt=newDraftAttempt.current;
       const next=await api.createNoteDraft(workspace.id,{...input,baseVersion:attempt.version,idempotencyKey:attempt.key});
       update(next);
@@ -594,7 +596,7 @@ function Workbench({ workspace, view, onView, aiConfigured, collectorConfigured,
       await editor.session.flush();
       const latest = await api.refresh(workspace.id); update(latest);
       if (editor.session.getSnapshot().conflict || editor.session.getSnapshot().review) throw new Error("另一端已修改草稿，请先查看更新。");
-      setPublishPreview(latest); setPublishKey(crypto.randomUUID());
+      setPublishPreview(latest); setPublishKey(randomUUID());
     });
   }
   async function publish() {
@@ -617,6 +619,13 @@ function Workbench({ workspace, view, onView, aiConfigured, collectorConfigured,
       const saved = await editor.session.flush();
       update(await api.attachSource(workspace.id, articleId, saved.version));
       void client.invalidateQueries({ queryKey: ["collectorArticle", articleId] });
+    });
+  }
+  async function selectLinkedMemo(memo: Memo) {
+    await action("material", async () => {
+      const saved = await editor.session.flush();
+      // Read the full note again, even when an older recommendation already exists.
+      update(await api.materials(workspace.id, Array.from(new Set([...saved.materials.map(item => item.id), memo.id])), saved.version));
     });
   }
   async function removeSource(articleId: string) {
@@ -647,7 +656,7 @@ function Workbench({ workspace, view, onView, aiConfigured, collectorConfigured,
     <main className="workbench">
       <section className="current-work">
         <h1>{excerpt(workspace.title, 200)}</h1>
-        <div className="work-meta"><MemoLink memo={workspace.source}>来源笔记</MemoLink><span>{date(workspace.source.created_at)}</span><details className="work-options"><summary aria-label="当前工作操作">更多<ChevronDown size={12}/></summary><div><button disabled={!!busy} onClick={() => void action("refresh", async () => update(await api.refresh(workspace.id)))}><RefreshCw size={13} className={busy === "refresh" ? "spin" : ""}/>检查 flomo 更新</button><button onClick={() => { void navigator.clipboard.writeText(`npm run --silent workbench -- workspace get ${workspace.id} --json`).then(() => { setCopyLabel("已复制"); setTimeout(() => setCopyLabel("复制 Codex 读取命令"), 2000); }).catch(() => setError("无法访问剪贴板，请通过当前页面地址中的工作区 ID 读取。")); }}><Terminal size={13}/>{copyLabel}</button><p>草稿版本 v{latestWorkspace.version}<br/>flomo 检查于 {date(latestWorkspace.lastCheckedAt, true)}</p></div></details></div>
+        <div className="work-meta"><MemoLink memo={workspace.source}>来源笔记</MemoLink><span>{date(workspace.source.created_at)}</span><details className="work-options"><summary aria-label="当前工作操作">更多<ChevronDown size={12}/></summary><div><button disabled={!!busy} onClick={() => void action("refresh", async () => update(await api.refresh(workspace.id)))}><RefreshCw size={13} className={busy === "refresh" ? "spin" : ""}/>检查 flomo 更新</button><button onClick={() => { void writeClipboardText(`npm run --silent workbench -- workspace get ${workspace.id} --json`).then(() => { setCopyLabel("已复制"); setTimeout(() => setCopyLabel("复制 Codex 读取命令"), 2000); }).catch(error => setError(messageOf(error))); }}><Terminal size={13}/>{copyLabel}</button><p>草稿版本 v{latestWorkspace.version}<br/>flomo 检查于 {date(latestWorkspace.lastCheckedAt, true)}</p></div></details></div>
         <GoalEditor workspace={latestWorkspace} onUpdate={update} onDirty={(dirty) => { goalDirty.current = dirty; }} />
       </section>
       <nav className="work-tabs" aria-label="当前工作视图">{(["note", "materials", "discussion", "writing", "draft"] as WorkbenchView[]).map((item) => <button key={item} className={view === item ? "selected" : ""} aria-current={view === item ? "page" : undefined} onClick={() => onView(item)}>{item === "note" ? <FileText size={16}/> : item === "materials" ? <Layers3 size={16}/> : item === "discussion" ? <MessageCircle size={16}/> : item === "writing" ? <Sparkles size={16}/> : <BookOpen size={16}/>}<span>{viewLabels[item]}</span>{item === "materials" && (selectedCount > 0 || proposed.length > 0) && <span className="tab-count" title={`已选 ${selectedCount} 条，待选 ${proposed.length} 条`}>{proposed.length ? `${proposed.length} 待选` : selectedCount}</span>}{item === "note" && decisionsToReview.length > 0 && <span className="tab-dot"/>}{item === "draft" && (editor.review || editor.conflict) && <span className="tab-dot"/>}</button>)}</nav>
@@ -664,6 +673,7 @@ function Workbench({ workspace, view, onView, aiConfigured, collectorConfigured,
             <div className="document-label"><FileText size={13}/><span>flomo 原文</span></div>
             <article className="source-document"><Markdown>{workspace.source.content}</Markdown>{workspace.source.content_truncated && <div className="notice">原文不完整，请检查接入状态后重新读取。</div>}</article>
           </section>
+          <LinkedMemos workspace={latestWorkspace} active={view === "note"} disabled={!!busy || !!editor.review || !!editor.conflict} onSelect={selectLinkedMemo} renderContent={content => <Markdown>{content}</Markdown>}/>
           {sourceAssociations("source")}
           <div className="supporting-tools">
           <AnnotationComposer workspace={workspace} jobs={jobs.data ?? []} onDirty={(dirty) => trackInput("annotation", dirty)} onCreated={() => void jobs.refetch()}/>
@@ -1034,7 +1044,7 @@ function AnnotationComposer({ workspace, jobs, onDirty, onCreated }: {workspace:
   const storageKey = `flomo-annotation:${workspace.id}`;
   const [open, setOpen] = useState(false);
   const [content, setContent] = useState(() => localStorage.getItem(storageKey) ?? "");
-  const [key, setKey] = useState(() => localStorage.getItem(`${storageKey}:request`) ?? crypto.randomUUID());
+  const [key, setKey] = useState(() => localStorage.getItem(`${storageKey}:request`) ?? randomUUID());
   const [submitted, setSubmitted] = useState<Job | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -1050,7 +1060,7 @@ function AnnotationComposer({ workspace, jobs, onDirty, onCreated }: {workspace:
       <ErrorBox error={error}/>
       {!current && <button className="button primary" disabled={busy || !content.trim()} onClick={() => { setBusy(true); setError(""); void api.annotate(workspace.id, content, key).then(job => {setSubmitted(job); onCreated();}).catch(error => setError(messageOf(error))).finally(() => setBusy(false)); }}>{busy ? "正在提交…" : "创建批注笔记"}</button>}
       {current && <p role="status">{current.status === "running" ? "正在创建批注…" : current.status === "succeeded" ? "已创建批注并关联原笔记" : current.error}</p>}
-      {current?.status === "succeeded" && <button className="text-button" onClick={() => {setContent(""); setKey(crypto.randomUUID()); setSubmitted(null);}}>再写一条批注</button>}
+      {current?.status === "succeeded" && <button className="text-button" onClick={() => {setContent(""); setKey(randomUUID()); setSubmitted(null);}}>再写一条批注</button>}
     </div>}
     {annotations.map(job => <div className="annotation-record" key={job.id}><span>{date(job.createdAt,true)} · {job.status === "succeeded" ? "已创建" : job.status === "running" ? "创建中" : "待核实"}</span>{job.resultMemo && <MemoLink memo={job.resultMemo}>打开批注笔记</MemoLink>}{job.error && <p>{job.error}</p>}</div>)}
   </section>;

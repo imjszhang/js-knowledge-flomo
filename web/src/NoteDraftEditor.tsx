@@ -1,3 +1,4 @@
+import { randomUUID } from "./browser-compat";
 import {useEffect, useState, type ReactNode} from "react";
 import {useQueryClient} from "@tanstack/react-query";
 import {ArrowUpRight, Check, Loader2, Save} from "lucide-react";
@@ -118,7 +119,7 @@ function Editor({workspace, draft, disabled, flush, onUpdate, onDirty, renderCon
       }
       const content = formatNoteDraft(latest);
       if (content.length > 20000) throw new Error("创建笔记的完整内容（含来源）超过 20,000 字，请精简正文或拆成多份草稿后再创建。");
-      setPreview({content, version: saved.version, key: crypto.randomUUID()});
+      setPreview({content, version: saved.version, key: randomUUID()});
     } catch (caught) {
       setError(messageOf(caught));
       refresh();

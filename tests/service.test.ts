@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Memo, Job } from '../shared/contracts.js';
@@ -187,6 +187,108 @@ test('HTTP validates mutations, blocks foreign websites and returns version conf
     assert.equal(stale.statusCode,409);
     assert.equal(stale.json().error.code,'VERSION_CONFLICT');
   } finally { await app.close(); await f.close(); }
+});
+
+test('HTTP rejects a gateway origin until it is explicitly configured', async () => {
+  const f = await setup(); const app = await createApp({service:f.service});
+  try {
+    const headers = {host:'127.0.0.1:3000',origin:'http://127.0.0.1:8888','x-workbench-actor':'web'};
+    const health = await app.inject({method:'GET',url:'/api/v1/health',headers});
+    assert.equal(health.statusCode,403);
+    assert.equal(health.json().error.code,'INVALID_ORIGIN');
+    const update = await app.inject({method:'PATCH',url:`/api/v1/workspaces/${f.workspace.id}/draft`,headers,payload:{draft:'gateway draft',baseVersion:1}});
+    assert.equal(update.statusCode,403);
+    assert.equal(update.json().error.code,'INVALID_ORIGIN');
+    assert.equal((await f.store.getWorkspace(f.workspace.id)).version,1);
+  } finally { await app.close(); await f.close(); }
+});
+
+test('HTTP accepts explicitly configured local, VPN and HTTPS gateway origins for reads and draft writes', async () => {
+  const f = await setup();
+  const allowedOrigins = ['http://127.0.0.1:8888','http://localhost:8888','http://10.8.0.5:8888','https://flomo.example.test'];
+  const app = await createApp({service:f.service,allowedOrigins});
+  try {
+    for (const [index,origin] of allowedOrigins.entries()) {
+      const headers = {host:'127.0.0.1:3000',origin,'x-workbench-actor':'web'};
+      const health = await app.inject({method:'GET',url:'/api/v1/health',headers});
+      assert.equal(health.statusCode,200,origin);
+      assert.equal(health.json().ok,true);
+      const draft = `gateway draft ${index}`;
+      const update = await app.inject({method:'PATCH',url:`/api/v1/workspaces/${f.workspace.id}/draft`,headers,payload:{draft,baseVersion:index + 1}});
+      assert.equal(update.statusCode,200,origin);
+      assert.equal(update.json().draft,draft);
+      assert.equal(update.json().version,index + 2);
+    }
+    assert.equal(f.flomo.writes,0);
+  } finally { await app.close(); await f.close(); }
+});
+
+test('HTTP gateway origin configuration preserves origin, host and actor checks', async () => {
+  const f = await setup();
+  const app = await createApp({service:f.service,allowedOrigins:['http://127.0.0.1:8888','http://localhost:8888','http://10.8.0.5:8888']});
+  try {
+    for (const headers of [
+      {host:'127.0.0.1:3000',origin:'http://127.0.0.1:8889'},
+      {host:'127.0.0.1:3000',origin:'http://evil.example:8888'},
+      {host:'127.0.0.1:3000',origin:'https://localhost:8888'},
+      {host:'127.0.0.1:3000',origin:'http://10.8.0.6:8888'},
+      {host:'127.0.0.1:3000',origin:'http://10.8.0.5:8889'},
+      {host:'127.0.0.1:3000',origin:'http://10.8.0.5.evil.example:8888'},
+      {host:'127.0.0.1:3000',origin:'http://10.8.0.5:8888/path'},
+      {host:'127.0.0.1:3000',origin:'null'},
+      {host:'127.0.0.1:3000',origin:'http://localhost:8889','x-forwarded-host':'localhost:8889'},
+    ]) {
+      const response = await app.inject({method:'GET',url:'/api/v1/health',headers});
+      assert.equal(response.statusCode,403,headers.origin);
+      assert.equal(response.json().error.code,'INVALID_ORIGIN');
+    }
+    const forgedHost = await app.inject({method:'GET',url:'/api/v1/health',headers:{host:'evil.example:3000',origin:'http://127.0.0.1:8888','x-forwarded-host':'127.0.0.1:3000'}});
+    assert.equal(forgedHost.statusCode,403);
+    assert.equal(forgedHost.json().error.code,'INVALID_HOST');
+    const missingActor = await app.inject({method:'PATCH',url:`/api/v1/workspaces/${f.workspace.id}/draft`,headers:{host:'127.0.0.1:3000',origin:'http://127.0.0.1:8888'},payload:{draft:'gateway draft',baseVersion:1}});
+    assert.equal(missingActor.statusCode,403);
+    assert.equal(missingActor.json().error.code,'ACTOR_REQUIRED');
+    assert.equal((await f.store.getWorkspace(f.workspace.id)).version,1);
+  } finally { await app.close(); await f.close(); }
+});
+
+test('HTTP gateway origins follow LAN address changes and cover VPN resources and writes', async () => {
+  const f = await setup();
+  const webRoot = await mkdtemp(join(tmpdir(),'flomo-gateway-origin-'));
+  await writeFile(join(webRoot,'app.js'),'window.workbenchLoaded = true;');
+  let addresses = ['192.168.0.135'];
+  const app = await createApp({service:f.service,webRoot,
+    gatewayOrigins:{ports:[8888],subnets:['10.8.0.0/24'],localAddresses:() => addresses}});
+  const headers = (origin: string) => ({host:'127.0.0.1:3000',origin,'x-workbench-actor':'web'});
+  try {
+    for (const origin of ['http://192.168.0.135:8888','http://10.8.0.1:8888','http://10.8.0.254:8888']) {
+      const resource = await app.inject({method:'GET',url:'/app.js',headers:headers(origin)});
+      assert.equal(resource.statusCode,200,origin);
+      assert.match(resource.body,/workbenchLoaded/);
+      assert.equal((await app.inject({method:'GET',url:'/api/v1/health',headers:headers(origin)})).statusCode,200);
+    }
+    // No new application instance: the same process must observe a DHCP change.
+    addresses = ['192.168.50.20'];
+    assert.equal((await app.inject({method:'GET',url:'/app.js',headers:headers('http://192.168.0.135:8888')})).statusCode,403);
+    const update = await app.inject({method:'PATCH',url:`/api/v1/workspaces/${f.workspace.id}/draft`,
+      headers:headers('http://192.168.50.20:8888'),payload:{draft:'after LAN change',baseVersion:1}});
+    assert.equal(update.statusCode,200);
+    assert.equal(update.json().draft,'after LAN change');
+    const vpnUpdate = await app.inject({method:'PATCH',url:`/api/v1/workspaces/${f.workspace.id}/draft`,
+      headers:headers('http://10.8.0.99:8888'),payload:{draft:'VPN gateway',baseVersion:2}});
+    assert.equal(vpnUpdate.statusCode,200);
+    const missingActor = await app.inject({method:'PATCH',url:`/api/v1/workspaces/${f.workspace.id}/draft`,
+      headers:{host:'127.0.0.1:3000',origin:'http://10.8.0.99:8888'},payload:{draft:'rejected',baseVersion:3}});
+    assert.equal(missingActor.json().error.code,'ACTOR_REQUIRED');
+    const forgedHost = await app.inject({method:'GET',url:'/api/v1/health',
+      headers:{...headers('http://10.8.0.99:8888'),host:'10.8.0.99:3000'}});
+    assert.equal(forgedHost.json().error.code,'INVALID_HOST');
+    const forgedOrigin = await app.inject({method:'GET',url:'/app.js',
+      headers:{...headers('http://evil.example:8888'),'x-forwarded-host':'10.8.0.99:8888','x-forwarded-proto':'http'}});
+    assert.equal(forgedOrigin.json().error.code,'INVALID_ORIGIN');
+    assert.equal((await f.store.getWorkspace(f.workspace.id)).version,3);
+    assert.equal(f.flomo.writes,0);
+  } finally { await app.close(); await f.close(); await rm(webRoot,{recursive:true,force:true}); }
 });
 
 test('SSE replays a durable cursor and delivers a subsequent CLI update', async () => {

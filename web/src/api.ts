@@ -19,6 +19,7 @@ import type {
 } from "../../shared/contracts";
 import type { AIDiscoveryRequest } from "./discovery-jobs";
 import type { NoteLinkCreateInput, NoteLinkInput, NoteLinkPreview } from "../../shared/note-links";
+import type { LinkedMemoResolution } from "../../shared/linked-memos";
 
 export class ApiError extends Error {
   constructor(
@@ -36,7 +37,7 @@ export async function request<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
-  const response = await fetch(`/api/v1${path}`, {
+  const response = await fetch(`./api/v1${path}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -79,6 +80,8 @@ export const api = {
     mutation<Workspace>(`/workspaces/${encodeURIComponent(id)}/discussion/refresh`, { baseVersion }),
   related: (id: string) =>
     request<Memo[]>(`/memos/${encodeURIComponent(id)}/related`),
+  linkedMemos: (id: string, signal?: AbortSignal) =>
+    request<LinkedMemoResolution>(`/workspaces/${encodeURIComponent(id)}/linked-memos`, { signal }),
   tags: () => request<TagResult>("/tags"),
   context: () => request<ActiveContext>("/context"),
   setContext: (workspaceId: string | null, view: WorkbenchView, baseRevision: number) =>

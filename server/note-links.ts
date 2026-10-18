@@ -4,25 +4,14 @@ import { noteLinkCreateSchema, noteLinkInputSchema, type NoteLinkCreateInput, ty
 import type { FlomoProvider } from './provider-types.js';
 import { Store } from './store.js';
 import { AppError } from './errors.js';
+import { memoLinksTo } from './memo-links.js';
+export { memoLinksTo } from './memo-links.js';
 
 const labels = {support:'支持',counterpoint:'不同观点',example:'例子',background:'背景'};
 const hash = (value:unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const message = (error:unknown) => error instanceof Error ? error.message : String(error);
 const pendingWrite = (job:Job) => ['publish','link'].includes(job.kind) && ['running','uncertain'].includes(job.status);
 type WriteLock = <T>(operation:() => Promise<T>) => Promise<T>;
-
-/** Only canonical flomo URLs or provider-confirmed links count; a bare ID is not a link. */
-export function memoLinksTo(memo:Memo, id:string):boolean {
-  if (memo.linked_memos.includes(id)) return true;
-  const content = memo.content.replace(/\\_/g,'_').replace(/&amp;/g,'&');
-  return (content.match(/https?:\/\/[^\s<>"']+/g) ?? []).some(candidate => {
-    try {
-      const url = new URL(candidate.replace(/[)\]。，,；;]+$/g,''));
-      return url.protocol === 'https:' && url.hostname === 'v.flomoapp.com' && !url.port && !url.username && !url.password &&
-        url.pathname === '/mine/' && url.searchParams.get('memo_id') === id;
-    } catch { return false; }
-  });
-}
 
 export class NoteLinkService {
   private tasks = new Set<Promise<void>>();

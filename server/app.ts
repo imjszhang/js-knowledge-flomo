@@ -12,33 +12,34 @@ import { AppError } from './errors.js';
 import { ProviderError } from './provider-types.js';
 import { noteLinkPreviewSchema, noteLinkCreateSchema } from '../shared/note-links.js';
 import { WorkbenchService } from './service.js';
+import { createOriginPolicy, loopbackHosts, type GatewayOrigins } from './origin-policy.js';
 
 interface Options {
   service: WorkbenchService;
   webRoot?: string;
   flomoConfigured?: () => Promise<boolean>;
   periodicRefresh?: boolean;
+  allowedOrigins?: string[];
+  gatewayOrigins?: GatewayOrigins;
 }
-const loopback = new Set(['localhost', '127.0.0.1', '[::1]']);
 const cursorSchema = z.coerce.number().int().nonnegative().safe();
 function actor(request: FastifyRequest): Actor {
   const value = request.headers['x-workbench-actor'];
   return value === 'cli' || value === 'mcp' ? value : 'web';
 }
 
-export async function createApp({ service, webRoot, flomoConfigured, periodicRefresh = false }: Options) {
+export async function createApp({ service, webRoot, flomoConfigured, periodicRefresh = false, allowedOrigins = [], gatewayOrigins }: Options) {
+  const allowsOrigin = createOriginPolicy(allowedOrigins, gatewayOrigins);
   const app = Fastify({ logger:false, bodyLimit:1_000_000 });
   const { store, flomo } = service;
   const streams = new Set<() => void>();
   app.addHook('onRequest', async (request, reply) => {
     const host = new URL(`http://${request.headers.host ?? 'localhost'}`).hostname;
-    if (!loopback.has(host)) throw new AppError('INVALID_HOST', '工作台仅允许本机访问', 403);
+    if (!loopbackHosts.has(host)) throw new AppError('INVALID_HOST', '工作台仅允许本机访问', 403);
     const origin = request.headers.origin;
     if (origin) {
-      let allowed = false;
-      try { const url = new URL(origin); allowed = loopback.has(url.hostname) && url.protocol === 'http:' && (url.host === request.headers.host || ['5173','5174'].includes(url.port)); }
-      catch { /* invalid origin */ }
-      if (!allowed) throw new AppError('INVALID_ORIGIN', '不允许此来源访问本地工作台', 403);
+      if (!allowsOrigin(origin, request.headers.host ?? 'localhost'))
+        throw new AppError('INVALID_ORIGIN', '不允许此来源访问本地工作台', 403);
     }
     if (!['GET','HEAD','OPTIONS'].includes(request.method) && !['web','cli','mcp'].includes(String(request.headers['x-workbench-actor'] ?? '')))
       throw new AppError('ACTOR_REQUIRED', '写入请求必须声明工作台入口', 403);
@@ -77,6 +78,7 @@ export async function createApp({ service, webRoot, flomoConfigured, periodicRef
     return service.createWorkspace(body.memoId, body.title, actor(request));
   });
   app.get(`${root}/workspaces/:id`, request => store.getWorkspace(idOf(request)));
+  app.get(`${root}/workspaces/:id/linked-memos`, request => service.resolveLinkedMemos(idOf(request)));
   app.get(`${root}/workspaces/:id/links`, request => service.noteLinks.list(idOf(request)));
   app.post(`${root}/workspaces/:id/links/preview`, request => service.noteLinks.preview(idOf(request),noteLinkPreviewSchema.parse(request.body)));
   app.post(`${root}/workspaces/:id/links`, async (request,reply) => {

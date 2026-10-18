@@ -1,3 +1,4 @@
+import { randomUUID } from "./browser-compat";
 import {useEffect, useState} from 'react';
 import {useQueryClient} from '@tanstack/react-query';
 import {ArrowUpRight, Check, Link2, Loader2} from 'lucide-react';
@@ -104,7 +105,7 @@ export function NoteLinkDialog({workspace,target,flush,onClose,onUpdate}: {
     let next = attempt;
     try {
       if (!next && preview) {
-        next = {preview,request:{...preview.input,previewHash:preview.previewHash,idempotencyKey:crypto.randomUUID()}};
+        next = {preview,request:{...preview.input,previewHash:preview.previewHash,idempotencyKey:randomUUID()}};
         // Persist synchronously before a remote write so refreshes can only resume this exact request.
         saveLocal(attemptKey,next);setAttempt(next);
       }

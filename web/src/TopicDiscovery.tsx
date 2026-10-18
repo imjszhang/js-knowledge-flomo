@@ -1,3 +1,4 @@
+import { randomUUID } from "./browser-compat";
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2, Search, Sparkles } from "lucide-react";
@@ -124,7 +125,7 @@ export function TopicDiscovery({workspace, jobs, aiConfigured, disabled, flush, 
     try {
       if (!attemptRef.current) {
         const saved = await flush();
-        rememberAttempt(prepareDiscoveryAttempt(null,form,instruction,saved.version,() => crypto.randomUUID()));
+        rememberAttempt(prepareDiscoveryAttempt(null,form,instruction,saved.version,() => randomUUID()));
       }
       attempt = attemptRef.current!;
       submissionController.current = new AbortController();

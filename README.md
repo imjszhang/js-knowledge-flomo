@@ -104,6 +104,25 @@ npm start
 
 开发时打开 **http://127.0.0.1:5173**；正式运行时打开 **http://127.0.0.1:3000**。两种方式的 CLI 都连接后台端口 3000。已有服务占用端口时先停止旧服务。
 
+### 挂到 local-llm-deploy 网关
+
+在 `.env` 启用网关端口，并按需指定 VPN 网段：
+
+```dotenv
+WORKBENCH_GATEWAY_PORTS=8888
+WORKBENCH_GATEWAY_SUBNETS=10.8.0.0/24
+```
+
+这样允许浏览器通过 `http://localhost:8888`、本机 IPv4 地址和整个 `10.8.0.0/24` 网段的网关入口加载资源、调用接口。工作台每次检查来源时读取当前网卡地址，局域网 IP 变化后新地址立即生效，旧地址自动失效，无需改配置或重启；浏览器仍需访问当前有效的地址。这里配置的是浏览器地址栏中的网关来源，不是客户端设备 IP 白名单，也不会替客户端建立 VPN 路由。未设置网关端口时默认不开启动态来源。
+
+固定域名或 HTTPS 入口仍可通过 `WORKBENCH_ALLOWED_ORIGINS` 精确配置，例如 `https://flomo.example.com`；多个来源用逗号分隔，不含路径或末尾斜杠。工作台后台仍仅监听本机，不信任客户端提供的转发头。然后构建并启动正式服务，再通过网关的 `PUT /gateway-api/v1/apps/flomo` 登记入口，使用网关模型 API Key 认证，JSON 正文如下：
+
+```json
+{"alias":"flomo · 知识工作台","prefix":"/flomo","upstream":"http://127.0.0.1:3000"}
+```
+
+登记后从网关首页或 `http://127.0.0.1:8888/flomo/` 打开。页面资源、API 和实时事件使用相对地址，同时支持直接访问和网关子路径。网关去掉 `/flomo` 前缀后转发给后台；入口登记持久保存在网关本机配置中，后台服务需持续运行。此登记仅挂载工作台入口，AI 仍使用 `.env` 中的模型配置。
+
 ```bash
 # Codex / Agent 读取待编（包括子标签）
 npm run --silent workbench -- memo list --tag 待编 --json
@@ -119,6 +138,8 @@ npm run --silent workbench -- changes watch --after 0 --json
 旧版搜索、洞察、缓存统计页面保留在 `npm run dev:legacy`，原 CLI、MCP、OpenClaw 入口保持兼容。新工作台加工状态请统一使用 `workbench` / `mcp:workbench`；旧入口直接修改 flomo 后，新工作台通过刷新原文检测变化。
 
 ### 关联收藏原文
+
+「笔记」页的「笔记关联内容」会读取当前笔记引用的 flomo 笔记，以及检索后确认引用了当前笔记的笔记。可以直接展开完整正文，再点「用于这次加工」保存为材料，让讨论和写作使用这些内容。反向引用受远端搜索范围限制；读取失败或范围不完整时会在页面提示。
 
 设置 `COLLECTOR_BASE_URL` 指向已有的 `js-knowledge-collector` 服务后，工作台会按当前笔记和已选 flomo 材料里的链接查找收藏，支持展开正文并加入本次加工。选用后保存正文快照，Web、CLI、MCP 和 AI 共用；需要获取收藏库的最新正文时点击“刷新快照”。收藏查询只读，不会重新抓取文章或写回 flomo。
 

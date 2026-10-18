@@ -20,7 +20,11 @@ try { store = await Store.open(databaseLock.dbPath); }
 catch (error) { await databaseLock.release(); throw error; }
 const service = new WorkbenchService(store, createFlomoProvider(), isAIConfigured() ? createAIProvider() : undefined, createCollectorProvider());
 await service.recover();
-const app = await createApp({service, webRoot:resolve(projectRoot,'dist/web'),flomoConfigured:isFlomoConfigured,periodicRefresh:true});
+const allowedOrigins = (process.env.WORKBENCH_ALLOWED_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean);
+const gatewayPorts = (process.env.WORKBENCH_GATEWAY_PORTS || '').split(',').map(value => value.trim()).filter(Boolean).map(Number);
+const gatewaySubnets = (process.env.WORKBENCH_GATEWAY_SUBNETS || '').split(',').map(value => value.trim()).filter(Boolean);
+const app = await createApp({service, webRoot:resolve(projectRoot,'dist/web'),flomoConfigured:isFlomoConfigured,periodicRefresh:true,
+  allowedOrigins,gatewayOrigins:{ports:gatewayPorts,subnets:gatewaySubnets}});
 let closing = false;
 async function close() {
   if (closing) return; closing = true;

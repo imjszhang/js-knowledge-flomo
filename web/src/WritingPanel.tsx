@@ -1,3 +1,4 @@
+import { randomUUID } from "./browser-compat";
 import {useEffect, useRef, useState, type ReactNode} from 'react';
 import type {AnalysisRecord, Workspace, WritingInput} from '../../shared/contracts';
 import {analysisIsStale} from '../../shared/analysis';
@@ -52,7 +53,7 @@ export function WritingPanel({workspace, aiConfigured, disabled, flush, onUpdate
       const saved = await flush();
       const input = {kind:stage === 'questions' ? 'insights' as const : 'outline' as const,engine,question:'',writing:{...form,claim:form.claim.trim(),stage},basisAnalysisId:stage === 'paragraph' ? basisId : stage === 'outline' ? questions?.id : undefined};
       const signature = JSON.stringify(input);
-      if(attempt.current?.signature !== signature) attempt.current = {signature,version:saved.version,key:crypto.randomUUID()};
+      if(attempt.current?.signature !== signature) attempt.current = {signature,version:saved.version,key:randomUUID()};
       onUpdate(await api.createAnalysis(workspace.id,{...input,baseVersion:attempt.current.version,idempotencyKey:attempt.current.key}));
       attempt.current = undefined;
     } catch(error) {

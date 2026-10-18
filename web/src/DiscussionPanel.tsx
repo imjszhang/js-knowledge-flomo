@@ -1,3 +1,4 @@
+import { randomUUID } from "./browser-compat";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, BookOpen, Check, ChevronDown, FileText, History, Loader2, RefreshCw, Sparkles } from "lucide-react";
@@ -118,7 +119,7 @@ function DiscussionPanelContent({ workspace, aiConfigured, disabled = false, flu
           let saved = await flush();
           if (kind === "update" && onRefreshMaterials) saved = await onRefreshMaterials();
           return saved.version;
-        }, () => crypto.randomUUID());
+        }, () => randomUUID());
         keepAttempt(pending);
         submitted = pending;
         const job = await api.ai(workspace.id, pending.prompt, pending.version, pending.key);
